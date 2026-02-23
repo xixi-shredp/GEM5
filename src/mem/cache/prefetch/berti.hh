@@ -23,8 +23,6 @@ namespace gem5
 
 struct BertiPrefetcherParams;
 
-GEM5_DEPRECATED_NAMESPACE(Prefetcher, prefetch);
-
 namespace prefetch
 {
 
@@ -65,6 +63,7 @@ class BertiPrefetcher : public Queued
     {
       public:
         std::vector<DeltaInfo> deltas;
+        // counter bits: 4 (0-15)
         uint8_t counter = 0;
         DeltaInfo bestDelta;
 
@@ -165,6 +164,7 @@ class BertiPrefetcher : public Queued
     int evictedBestDelta;
 
     boost::compute::detail::lru_cache<Addr, Addr> trainBlockFilter;
+    boost::compute::detail::lru_cache<Addr, Addr> selfPFFilter;
 
     std::unordered_map<int64_t, uint64_t> topDeltas;
 
@@ -173,7 +173,7 @@ class BertiPrefetcher : public Queued
     const bool dumpTopDeltas;
 
   public:
-    boost::compute::detail::lru_cache<Addr, Addr> *filter;
+    boost::compute::detail::lru_cache<Addr, Addr> *pfFilter;
 
     BertiPrefetcher(const BertiPrefetcherParams &p);
 
@@ -203,17 +203,8 @@ class BertiPrefetcher : public Queued
     shouldTrain(bool is_miss, const PrefetchInfo &pfi)
     {
         if (is_miss) {
-            // Currently, XSCompositePrefetcher lets multiple accesses to the
-            // same block be seen by prefetchers. Maybe, we should filter them
-            // out return
-            // !trainBlockFilter.contains(blockIndex(pfi.getAddr()));
             return true;
         } else {
-            // This is to let multiple accessses into the same block be seen by
-            // different PC entryeis return
-            // !trainBlockFilter.contains(blockIndex(pfi.getAddr())) &&
-            //        historyTable.findEntry(pcHash(pfi.getPC()),
-            //        pfi.isSecure()) != nullptr;
             return historyTable.findEntry(pcHash(pfi.getPC()),
                                           pfi.isSecure()) != nullptr;
         }

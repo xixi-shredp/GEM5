@@ -600,6 +600,13 @@ class BertiPrefetcher(QueuedPrefetcher):
     trigger_pht = Param.Bool(True, "Use Berti's prediction to trigger PHT")
     dump_top_deltas = Param.Bool(True, "Dump top deltas on exit")
 
+    shared_pf_filter = Param.Bool(
+        True, "Use shared prefetch Filter with other prefetcher."
+    )
+    pf_filter_size = Param.Int(
+        8, "The size of prefetch filter (valid when shared_pf_filter is False)"
+    )
+
 
 class BOPPrefetcher(QueuedPrefetcher):
     type = "BOPPrefetcher"

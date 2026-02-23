@@ -44,8 +44,13 @@ BertiPrefetcher::BertiPrefetcher(const BertiPrefetcherParams &p)
       triggerPht(p.trigger_pht),
       statsBerti(this),
       trainBlockFilter(8),
+      selfPFFilter(p.pf_filter_size),
       dumpTopDeltas(p.dump_top_deltas)
 {
+    // if shared_pf_filter is True, pfFilter should be assigned by outer.
+    if (!p.shared_pf_filter) {
+        pfFilter = &selfPFFilter;
+    }
     registerExitCallback([this]() {
         if (this->dumpTopDeltas) {
             std::vector<std::pair<int64_t, uint64_t>> top_delta_vec;
@@ -310,7 +315,8 @@ BertiPrefetcher::sendPFWithFilter(const PrefetchInfo &pfi, Addr addr,
     if (using_best_delta_and_confident) {
         lastUsedBestDelta = blockIndex(addr) - blockIndex(pfi.getAddr());
     }
-    if (trainBlockFilter.contains(addr)) {
+    gem5_assert(pfFilter, "pfFilter should be defined.(shared or individual)");
+    if (pfFilter->contains(addr)) {
         DPRINTF(BertiPrefetcher, "Skip recently prefetched: %lx\n", addr);
         return false;
     } else {
@@ -319,7 +325,7 @@ BertiPrefetcher::sendPFWithFilter(const PrefetchInfo &pfi, Addr addr,
         topDeltas[blk_delta] =
             topDeltas.count(blk_delta) ? topDeltas[blk_delta] + 1 : 1;
         DPRINTF(BertiPrefetcher, "Send pf: %lx\n", addr);
-        trainBlockFilter.insert(addr, 0);
+        pfFilter->insert(addr, 0);
         addresses.push_back(AddrPriority(addr, prio));
         return true;
     }
