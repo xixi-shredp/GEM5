@@ -218,7 +218,11 @@ Fetch::FetchStatGroup::FetchStatGroup(CPU *cpu, Fetch *fetch)
       ADD_STAT(idleRate, statistics::units::Ratio::get(),
                "Ratio of cycles fetch was idle"),
       ADD_STAT(ftNumber, statistics::units::Count::get(),
-               "Number of fetch targets processed each cycle (Total)")
+               "Number of fetch targets processed each cycle (Total)"),
+      ADD_STAT(fetchBubbles, statistics::units::Count::get(),
+              "Unutilized issue-pipeline slots while there is no backend-stall"),
+      ADD_STAT(fetchBubbles_max, statistics::units::Count::get(),
+              "Cycles that fetch 0 instruction while there is no backend-stall")
 {
     status.init(ThreadStatusMax).flags(statistics::pdf | statistics::nozero);
     for (int i = 0; i < ThreadStatusMax; ++i) {
@@ -905,6 +909,9 @@ Fetch::tick()
             tid_itr = activeThreads->begin();
     }
 
+    // Intel TopDown method for measuring frontend bubbles
+    measureFrontendBubbles(insts_to_decode, *tid_itr);
+
     // If there was activity this cycle, inform the CPU of it.
     if (wroteToTimeBuffer) {
         DPRINTF(Activity, "Activity this cycle.\n");
@@ -913,6 +920,29 @@ Fetch::tick()
 
     // Reset the number of the instruction we've fetched.
     numInst = 0;
+}
+
+
+void
+Fetch::measureFrontendBubbles(unsigned insts_to_decode, ThreadID tid)
+{
+    // Intel TopDown method for measuring frontend bubbles
+    // Count unutilized issue slots when backend is not stalled (decode not stalled)
+    // For N-wide machine, if frontend supplies 0 instructions:
+    // - fetchBubbles += N (count total empty slots)
+    // - fetchBubbles_max += 1 (count occurrence of all slots being empty)
+    if (!stalls[tid].decode && !fromCommit->commitInfo[tid].robSquashing) {
+        // backend not stalled
+        int unused_slots = decodeWidth - insts_to_decode;
+        if (unused_slots > 0) {
+            // has empty slots
+            fetchStats.fetchBubbles += unused_slots; // add number of empty slots
+            if (unused_slots == decodeWidth) {
+                // all slots empty, insts_to_decode == 0
+                fetchStats.fetchBubbles_max++; // count max bubble occurrence
+            }
+        }
+    }
 }
 
 bool

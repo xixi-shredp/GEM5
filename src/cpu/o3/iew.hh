@@ -239,6 +239,12 @@ class IEW
     {
         ldstQueue.setLastRetiredHtmUid(tid, htmUid);
     }
+    
+    unsigned getIssueWidth()
+    {
+      return issueWidth;
+    }
+    
 
   private:
     /** Sends commit proper information for a squash due to a branch
@@ -295,6 +301,8 @@ class IEW
      * Writeback to run for one cycle.
      */
     void tick();
+  
+    auto& getIEWStats() { return iewStats; }
 
   private:
     /** Updates execution stats based on the instruction. */

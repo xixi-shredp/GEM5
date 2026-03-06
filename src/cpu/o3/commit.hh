@@ -311,6 +311,8 @@ class Commit
 
     /** Sets the PC of a specific thread. */
     void pcState(const PCStateBase &val, ThreadID tid) { set(pc[tid], val); }
+  
+    auto& getStats() { return stats; }
 
   private:
     /** Time buffer interface. */
@@ -495,7 +497,28 @@ class Commit
 
         /** Number of cycles where the commit bandwidth limit is reached. */
         statistics::Scalar commitEligibleSamples;
+    
+        /** Unutilized issue-pipeline slots due to recovery from
+          * earlier miss-speculation.
+          */
+        statistics::Scalar recoveryBubbles;
+    
+        /** Number of squash due to branch */
+        statistics::Scalar squashDueToBranch;
+        /** Number of squash due to order violation */
+        statistics::Scalar squashDueToOrderViolation;
+        /** Number of squash due to trap */
+        statistics::Scalar squashDueToTrap;
+        /** Number of squash due to TC */
+        statistics::Scalar squashDueToTC;
+        /** Number of squash due to squash after */
+        statistics::Scalar squashDueToSquashAfter;
+        /** Total number of squash */
+        statistics::Formula totalSquash;
     } stats;
+
+    bool lastMispred = false;
+    uint64_t lastCommitCycle = 0;
 };
 
 } // namespace o3

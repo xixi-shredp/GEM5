@@ -633,6 +633,34 @@ class InstructionQueue
         statistics::Scalar fpAluAccesses;
         statistics::Scalar vecAluAccesses;
     } iqIOStats;
+    
+    
+    struct BackendBoundStats : public statistics::Group
+    {
+        BackendBoundStats(statistics::Group* parent);
+        statistics::Scalar exec_stall_cycle;
+        statistics::Scalar memstall_any_load;
+        statistics::Scalar memstall_any_store;
+        statistics::Scalar memstall_l1miss;
+        statistics::Scalar memstall_l2miss;
+        statistics::Scalar memstall_l3miss;
+        statistics::Scalar memstall_l1miss_s;
+        statistics::Scalar memstall_l1miss_vus;
+        statistics::Scalar memstall_l1miss_vs;
+        statistics::Scalar memstall_l1miss_vi;
+        statistics::Scalar memstall_l2miss_s;
+        statistics::Scalar memstall_l2miss_vus;
+        statistics::Scalar memstall_l2miss_vs;
+        statistics::Scalar memstall_l2miss_vi;
+        statistics::Scalar memstall_l3miss_s;
+        statistics::Scalar memstall_l3miss_vus;
+        statistics::Scalar memstall_l3miss_vs;
+        statistics::Scalar memstall_l3miss_vi;
+        statistics::Scalar memstall_anymiss_s;
+        statistics::Scalar memstall_anymiss_vus;
+        statistics::Scalar memstall_anymiss_vs;
+        statistics::Scalar memstall_anymiss_vi;
+    } backendStats;
 };
 
 } // namespace o3

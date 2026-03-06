@@ -229,7 +229,7 @@ InstructionQueue::InstructionQueue(CPU *cpu_ptr, IEW *iew_ptr,
       totalWidth(params.issueWidth),
       commitToIEWDelay(params.commitToIEWDelay),
       iqStats(cpu, totalWidth),
-      iqIOStats(cpu)
+      iqIOStats(cpu), backendStats(cpu)
 {
     const auto &reg_classes = params.isa[0]->regClasses();
     // Set the number of total physical registers
@@ -485,6 +485,64 @@ InstructionQueue::IQIOStats::IQIOStats(statistics::Group *parent)
 
     vecAluAccesses
         .flags(total);
+}
+
+InstructionQueue::BackendBoundStats::BackendBoundStats(
+    statistics::Group* parent)
+    : statistics::Group(parent),
+      ADD_STAT(exec_stall_cycle, "SUM(OpsExecuted[= FEW])"),
+      ADD_STAT(memstall_any_load,
+               "Cycles with no uops executed and at least X in-flight load that is not completed yet"),
+      ADD_STAT(memstall_any_store, "Cycles with few uops executed and no more stores can be issued"),
+      ADD_STAT(memstall_l1miss,
+               "Cycles with no uops executed and at least X in-flight load that has missed the L1-cache"),
+      ADD_STAT(memstall_l2miss,
+               "Cycles with no uops executed and at least X in-flight load that has missed the L2-cache"),
+      ADD_STAT(memstall_l3miss,
+               "Cycles with no uops executed and at least X in-flight load that has missed the L3-cache"),
+      ADD_STAT(memstall_l1miss_s,
+               "Cycles with no uops executed and at least X in-flight scalar load that has missed the L1-cache"),
+      ADD_STAT(memstall_l1miss_vus,
+               "Cycles with no uops executed and at least X in-flight vector united strided load "
+               "that has missed the L1-cache"),
+      ADD_STAT(memstall_l1miss_vs,
+               "Cycles with no uops executed and at least X in-flight vector strided load "
+               "that has missed the L1-cache"),
+      ADD_STAT(memstall_l1miss_vi,
+               "Cycles with no uops executed and at least X in-flight vector indexed load "
+               "that has missed the L1-cache"),
+      ADD_STAT(memstall_l2miss_s,
+               "Cycles with no uops executed and at least X in-flight scalar load that has missed the L2-cache"),
+      ADD_STAT(memstall_l2miss_vus,
+               "Cycles with no uops executed and at least X in-flight vector united strided load "
+               "that has missed the L2-cache"),
+      ADD_STAT(memstall_l2miss_vs,
+               "Cycles with no uops executed and at least X in-flight vector strided load "
+               "that has missed the L2-cache"),
+      ADD_STAT(memstall_l2miss_vi,
+               "Cycles with no uops executed and at least X in-flight vector indexed load "
+               "that has missed the L2-cache"),
+      ADD_STAT(memstall_l3miss_s,
+               "Cycles with no uops executed and at least X in-flight scalar load that has missed the L3-cache"),
+      ADD_STAT(memstall_l3miss_vus,
+               "Cycles with no uops executed and at least X in-flight vector united strided load "
+               "that has missed the L3-cache"),
+      ADD_STAT(memstall_l3miss_vs,
+               "Cycles with no uops executed and at least X in-flight vector strided load "
+               "that has missed the L3-cache"),
+      ADD_STAT(memstall_l3miss_vi,
+               "Cycles with no uops executed and at least X in-flight vector indexed load "
+               "that has missed the L3-cache"),
+      ADD_STAT(memstall_anymiss_s,
+               "Cycles with no uops executed and at least X in-flight scalar load that is not completed"),
+      ADD_STAT(memstall_anymiss_vus,
+               "Cycles with no uops executed and at least X in-flight vector united strided load "
+               "that is not completed"),
+      ADD_STAT(memstall_anymiss_vs,
+               "Cycles with no uops executed and at least X in-flight vector strided load that is not completed"),
+      ADD_STAT(memstall_anymiss_vi,
+               "Cycles with no uops executed and at least X in-flight vector indexed load that is not completed")
+{
 }
 
 void
@@ -1011,6 +1069,60 @@ InstructionQueue::scheduleReadyInsts()
             iqStats.statFuBusy[op_class]++;
             iqStats.fuBusy[tid]++;
             ++order_it;
+        }
+    }
+    
+    const int intelFewOps = 4;
+    auto lsq = &iewStage->ldstQueue;
+    if (instsToExecute.size() < intelFewOps) {
+        backendStats.exec_stall_cycle++;
+        if (lsq->anyStoreNotExecute())
+            backendStats.memstall_any_store++;
+    }
+    if (instsToExecute.size() == 0) {
+        int misslevel = lsq->anyInflightLoadsNotComplete();
+        if (misslevel != 0)
+            backendStats.memstall_any_load++;
+
+        int l1_code = misslevel & 0xf;
+        misslevel >>= 4;
+        int l2_code = misslevel & 0xf;
+        misslevel >>= 4;
+        int l3_code = misslevel & 0xf;
+        misslevel >>= 4;
+        int any_code = misslevel & 0xf;
+
+        bool l1_miss  = l1_code  != 0;
+        bool l2_miss  = l2_code  != 0 && l1_miss;
+        bool l3_miss  = l3_code  != 0 && l2_miss;
+        bool any_miss = any_code != 0;
+
+        if (l1_miss) {
+            backendStats.memstall_l1miss++;
+            if (l1_code & 0x1) backendStats.memstall_l1miss_s  ++;
+            if (l1_code & 0x2) backendStats.memstall_l1miss_vus++;
+            if (l1_code & 0x4) backendStats.memstall_l1miss_vs ++;
+            if (l1_code & 0x8) backendStats.memstall_l1miss_vi ++;
+        }
+        if (l2_miss) {
+            backendStats.memstall_l2miss++;
+            if (l2_code & 0x1) backendStats.memstall_l2miss_s  ++;
+            if (l2_code & 0x2) backendStats.memstall_l2miss_vus++;
+            if (l2_code & 0x4) backendStats.memstall_l2miss_vs ++;
+            if (l2_code & 0x8) backendStats.memstall_l2miss_vi ++;
+        }
+        if (l3_miss) {
+            backendStats.memstall_l3miss++;
+            if (l3_code & 0x1) backendStats.memstall_l3miss_s  ++;
+            if (l3_code & 0x2) backendStats.memstall_l3miss_vus++;
+            if (l3_code & 0x4) backendStats.memstall_l3miss_vs ++;
+            if (l3_code & 0x8) backendStats.memstall_l3miss_vi ++;
+        }
+        if (any_miss) {
+            if (any_code & 0x1) backendStats.memstall_anymiss_s  ++;
+            if (any_code & 0x2) backendStats.memstall_anymiss_vus++;
+            if (any_code & 0x4) backendStats.memstall_anymiss_vs ++;
+            if (any_code & 0x8) backendStats.memstall_anymiss_vi ++;
         }
     }
 

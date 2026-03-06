@@ -185,7 +185,22 @@ Commit::CommitStats::CommitStats(CPU *cpu, Commit *commit)
       ADD_STAT(committedInstType, statistics::units::Count::get(),
                "Class of committed instruction"),
       ADD_STAT(commitEligibleSamples, statistics::units::Cycle::get(),
-               "number cycles where commit BW limit reached")
+               "number cycles where commit BW limit reached"),
+      ADD_STAT(recoveryBubbles, statistics::units::Count::get(),
+               "Unutilized issue-pipeline slots" 
+               "due to recovery from earlier miss-speculation"),
+      ADD_STAT(squashDueToBranch, statistics::units::Count::get(),
+               "Number of squash due to branch"),
+      ADD_STAT(squashDueToOrderViolation, statistics::units::Count::get(),
+               "Number of squash due to order violation"),
+      ADD_STAT(squashDueToTrap, statistics::units::Count::get(),
+               "Number of squash due to trap"),
+      ADD_STAT(squashDueToTC, statistics::units::Count::get(),
+               "Number of squash due to TC"),
+      ADD_STAT(squashDueToSquashAfter, statistics::units::Count::get(),
+               "Number of squash due to squash after"),
+      ADD_STAT(totalSquash, statistics::units::Count::get(),
+               "Total number of squash")
 {
     using namespace statistics;
 
@@ -215,6 +230,9 @@ Commit::CommitStats::CommitStats(CPU *cpu, Commit *commit)
         .flags(total | pdf | dist);
 
     committedInstType.ysubnames(enums::OpClassStrings);
+    
+    totalSquash = squashDueToBranch + squashDueToOrderViolation + \
+        squashDueToTrap + squashDueToTC + squashDueToSquashAfter;
 }
 
 void
@@ -549,6 +567,7 @@ Commit::squashFromTrap(ThreadID tid)
     trapSquash[tid] = false;
 
     commitStatus[tid] = ROBSquashing;
+    stats.squashDueToTrap++;
     cpu->activityThisCycle();
 }
 
@@ -563,6 +582,7 @@ Commit::squashFromTC(ThreadID tid)
     assert(!thread[tid]->trapPending);
 
     commitStatus[tid] = ROBSquashing;
+    stats.squashDueToTC++;
     cpu->activityThisCycle();
 
     tcSquash[tid] = false;
@@ -582,6 +602,7 @@ Commit::squashFromSquashAfter(ThreadID tid)
     squashAfterInst[tid] = NULL;
 
     commitStatus[tid] = ROBSquashing;
+    stats.squashDueToSquashAfter++;
     cpu->activityThisCycle();
 }
 
@@ -794,10 +815,12 @@ Commit::commit()
                     tid,
                     fromIEW->mispredictInst[tid]->pcState().instAddr(),
                     fromIEW->squashedSeqNum[tid]);
+                stats.squashDueToBranch++;
             } else {
                 DPRINTF(Commit,
                     "[tid:%i] Squashing due to order violation [sn:%llu]\n",
                     tid, fromIEW->squashedSeqNum[tid]);
+                stats.squashDueToOrderViolation++;
             }
 
             DPRINTF(Commit, "[tid:%i] Redirecting to PC %#x\n",
@@ -989,6 +1012,17 @@ Commit::commitInsts()
                     ->committedInstType[head_inst->opClass()]++;
                 stats.committedInstType[tid][head_inst->opClass()]++;
                 ppCommit->notify(head_inst);
+                
+                
+                if (lastMispred) {
+                    lastMispred = false;
+                    stats.recoveryBubbles +=
+                        (cpu->curCycle() - lastCommitCycle) * renameWidth;
+                }
+                if (head_inst->mispredicted()) {
+                    lastMispred = true;
+                }
+                lastCommitCycle = cpu->curCycle();
 
                 // hardware transactional memory
 

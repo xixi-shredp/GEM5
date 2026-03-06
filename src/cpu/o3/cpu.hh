@@ -52,6 +52,7 @@
 
 #include "arch/generic/pcstate.hh"
 #include "base/statistics.hh"
+#include "base/stats/group.hh"
 #include "cpu/activity.hh"
 #include "cpu/base.hh"
 #include "cpu/o3/bac.hh"
@@ -613,7 +614,75 @@ class CPU : public BaseCPU
          * quiesce operation or waiting for an interrupt. */
         statistics::Scalar quiesceCycles;
     } cpuStats;
+    
+    struct TopDownStats : public statistics::Group
+    {
+        TopDownStats(CPU *cpu);
 
+        // intel top down stats
+        /** Base retiring */
+        statistics::Formula baseRetiring;
+        /** Frontend Bound */
+        statistics::Formula frontendBound;
+        /** Frontend Latency Bound */
+        statistics::Formula frontendLatencyBound;
+        /** Frontend Bandwidth Bound */
+        statistics::Formula frontendBandwidthBound;
+        /** BadSpec Bound */
+        statistics::Formula badSpecBound;
+        /** Branch Miss Prediction Bound */
+        statistics::Formula branchMissPrediction;
+        /** Machine clears */
+        statistics::Formula machineClears;
+        /** Backend Bound */
+        statistics::Formula backendBound;
+        /** Core Bound */
+        statistics::Formula coreBound;
+        /** Memory Bound */
+        statistics::Formula memoryBound;
+        /** L1 Bound */
+        statistics::Formula l1Bound;
+        /** L1 Bound: Scalar */
+        statistics::Formula l1sBound;
+        /** L1 Bound: VectorUnitStride */
+        statistics::Formula l1vusBound;
+        /** L1 Bound: VectorStrided */
+        statistics::Formula l1vsBound;
+        /** L1 Bound: VectorIndexed */
+        statistics::Formula l1viBound;
+        /** L2 Bound */
+        statistics::Formula l2Bound;
+        /** L2 Bound: Scalar */
+        statistics::Formula l2sBound;
+        /** L2 Bound: VectorUnitStride */
+        statistics::Formula l2vusBound;
+        /** L2 Bound: VectorStrided */
+        statistics::Formula l2vsBound;
+        /** L2 Bound: VectorIndexed */
+        statistics::Formula l2viBound;
+        /** L3 Bound */
+        statistics::Formula l3Bound;
+        /** L3 Bound: Scalar */
+        statistics::Formula l3sBound;
+        /** L3 Bound: VectorUnitStride */
+        statistics::Formula l3vusBound;
+        /** L3 Bound: VectorStrided */
+        statistics::Formula l3vsBound;
+        /** L3 Bound: VectorIndexed */
+        statistics::Formula l3viBound;
+        /** Mem Bound */
+        statistics::Formula memBound;
+        /** Mem Bound: Scalar */
+        statistics::Formula memsBound;
+        /** Mem Bound: VectorUnitStride */
+        statistics::Formula memvusBound;
+        /** Mem Bound: VectorStrided */
+        statistics::Formula memvsBound;
+        /** Mem Bound: VectorIndexed */
+        statistics::Formula memviBound;
+        /** store Bound */
+        statistics::Formula storeBound;
+    } topDownStats;
   public:
     // hardware transactional memory
     void htmSendAbortSignal(ThreadID tid, uint64_t htm_uid,

@@ -752,6 +752,52 @@ LSQ::dumpInsts(ThreadID tid) const
     thread.at(tid).dumpInsts();
 }
 
+
+static int MemboundTypeCodeWidth = 4;
+static inline int
+statLoadboundTypeCode(StaticInstPtr inst)
+{
+    int miss = 0;
+    if (inst->isVectorUnitStrideLoad())   { miss |= 1 << 1; }
+    else if (inst->isVectorStridedLoad()) { miss |= 1 << 2; }
+    else if (inst->isVectorIndexedLoad()) { miss |= 1 << 3; }
+    else { miss |= 1; } // Scalar
+    return miss;
+}
+
+int
+LSQ::anyInflightLoadsNotComplete()
+{
+    int l1miss = 0, l2miss = 0, l3miss = 0, any = 0;
+    for (auto it : thread.at(0).inflightLoads) {
+        if (it->isAnyOutstandingRequest()) {
+            auto inst = it->instruction()->staticInst;
+            if (it->mainReq()->depth == 1) {
+                l1miss |= statLoadboundTypeCode(inst);
+            }
+            if (it->mainReq()->depth == 2) {
+                l2miss |= statLoadboundTypeCode(inst) << MemboundTypeCodeWidth;
+            }
+            if (it->mainReq()->depth == 3) {
+                l3miss |= statLoadboundTypeCode(inst) << MemboundTypeCodeWidth * 2;
+            }
+            any |= statLoadboundTypeCode(inst) << MemboundTypeCodeWidth * 3;
+        }
+    }
+    return l1miss | l2miss | l3miss | any;
+}
+
+bool
+LSQ::anyStoreNotExecute()
+{
+    for (auto& it : thread.at(0).storeQueue) {
+        if (!it.instruction()->isIssued()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 Fault
 LSQ::pushRequest(const DynInstPtr& inst, bool isLoad, uint8_t *data,
         unsigned int size, Addr addr, Request::Flags flags, uint64_t *res,
@@ -1167,6 +1213,13 @@ LSQ::SplitDataRequest::markAsStaleTranslation()
 bool
 LSQ::SingleDataRequest::recvTimingResp(PacketPtr pkt)
 {
+
+    if (isLoad()) {
+        auto it = std::find(lsqUnit()->inflightLoads.begin(), lsqUnit()->inflightLoads.end(), this);
+        if (it != lsqUnit()->inflightLoads.end()) {
+            lsqUnit()->inflightLoads.erase(it);
+        }
+    }
     assert(_numOutstandingPackets == 1);
     flags.set(Flag::Complete);
     assert(pkt == _packets.front());
@@ -1184,6 +1237,12 @@ LSQ::SplitDataRequest::recvTimingResp(PacketPtr pkt)
     assert(pktIdx < _packets.size());
     numReceivedPackets++;
     if (numReceivedPackets == _packets.size()) {
+        if (isLoad()) {
+            auto it = std::find(lsqUnit()->inflightLoads.begin(), lsqUnit()->inflightLoads.end(), this);
+            if (it != lsqUnit()->inflightLoads.end()) {
+                lsqUnit()->inflightLoads.erase(it);
+            }
+        }
         flags.set(Flag::Complete);
         /* Assemble packets. */
         PacketPtr resp = isLoad()
@@ -1302,8 +1361,13 @@ void
 LSQ::SingleDataRequest::sendPacketToCache()
 {
     assert(_numOutstandingPackets == 0);
-    if (lsqUnit()->trySendPacket(isLoad(), _packets.at(0)))
+    if (lsqUnit()->trySendPacket(isLoad(), _packets.at(0))){
         _numOutstandingPackets = 1;
+        if (isLoad()) {
+            assert(lsqUnit()->inflightLoads.size() < lsqUnit()->numLoads() + 4);
+            lsqUnit()->inflightLoads.emplace_back(this);
+        }
+    }
 }
 
 void
@@ -1314,6 +1378,10 @@ LSQ::SplitDataRequest::sendPacketToCache()
             lsqUnit()->trySendPacket(isLoad(),
                 _packets.at(numReceivedPackets + _numOutstandingPackets))) {
         _numOutstandingPackets++;
+    }
+    if (_numOutstandingPackets == _packets.size() && isLoad()) {
+        assert(lsqUnit()->inflightLoads.size() < lsqUnit()->numLoads() + 4);
+        lsqUnit()->inflightLoads.emplace_back(this);
     }
 }
 

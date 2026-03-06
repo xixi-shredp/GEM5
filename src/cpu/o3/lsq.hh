@@ -689,7 +689,7 @@ class LSQ
         virtual PacketPtr mainPacket();
         virtual std::string name() const { return "SplitDataRequest"; }
     };
-
+    
     /** Constructs an LSQ with the given parameters. */
     LSQ(CPU *cpu_ptr, IEW *iew_ptr, const BaseO3CPUParams &params);
 
@@ -785,6 +785,8 @@ class LSQ
     /** Returns the total number of stores for a single thread. */
     int numStores(ThreadID tid);
 
+    int anyInflightLoadsNotComplete();
+    bool anyStoreNotExecute();
 
     // hardware transactional memory
 

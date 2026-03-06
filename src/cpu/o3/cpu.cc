@@ -113,7 +113,8 @@ CPU::CPU(const BaseO3CPUParams &params)
       globalFTSeqNum(1),
       system(params.system),
       lastRunningCycle(curCycle()),
-      cpuStats(this)
+      cpuStats(this),
+      topDownStats(this)
 {
     fatal_if(FullSystem && params.numThreads > 1,
             "SMT is not supported in O3 in full system mode currently.");
@@ -362,6 +363,193 @@ CPU::CPUStats::CPUStats(CPU *cpu)
 
     quiesceCycles
         .prereq(quiesceCycles);
+}
+
+CPU::TopDownStats::TopDownStats(CPU *cpu)
+    : statistics::Group(cpu),
+      ADD_STAT(baseRetiring, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level1: Retiring"),
+      ADD_STAT(frontendBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level1: Frontend Bound"),
+      ADD_STAT(frontendLatencyBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level2: |--Frontend Latency Bound"),
+      ADD_STAT(frontendBandwidthBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level2: |--Frontend Bandwidth Bound"),
+      ADD_STAT(badSpecBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level1: Bad Speculation"),
+      ADD_STAT(branchMissPrediction, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level2: |--Branch Missprediction"),
+      ADD_STAT(machineClears, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level2: |--Machine Clears"),
+      ADD_STAT(backendBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level1: Backend Bound"),
+      ADD_STAT(coreBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level2: |--Core Bound"),
+      ADD_STAT(memoryBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level2: |--Memory Bound"),
+      ADD_STAT(l1Bound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level3:    |--L1 Bound"),
+      ADD_STAT(l1sBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level4:       |--L1 Scalar Bound"),
+      ADD_STAT(l1vusBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level4:       |--L1 VectorUnitStride Bound"),
+      ADD_STAT(l1vsBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level4:       |--L1 VectorStrided Bound"),
+      ADD_STAT(l1viBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level4:       |--L1 VectorIndexed Bound"),
+      ADD_STAT(l2Bound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level3:    |--L2 Bound"),
+      ADD_STAT(l2sBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level4:       |--L2 Scalar Bound"),
+      ADD_STAT(l2vusBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level4:       |--L2 VectorUnitStride Bound"),
+      ADD_STAT(l2vsBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level4:       |--L2 VectorStrided Bound"),
+      ADD_STAT(l2viBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level4:       |--L2 VectorIndexed Bound"),
+      ADD_STAT(l3Bound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level3:    |--L3 Bound"),
+      ADD_STAT(l3sBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level4:       |--L3 Scalar Bound"),
+      ADD_STAT(l3vusBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level4:       |--L3 VectorUnitStride Bound"),
+      ADD_STAT(l3vsBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level4:       |--L3 VectorStrided Bound"),
+      ADD_STAT(l3viBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level4:       |--L3 VectorIndexed Bound"),
+      ADD_STAT(memBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level3:    |--Memory Bound"),
+      ADD_STAT(memsBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level4:       |--Mem Scalar Bound"),
+      ADD_STAT(memvusBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level4:       |--Mem VectorUnitStride Bound"),
+      ADD_STAT(memvsBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level4:       |--Mem VectorStrided Bound"),
+      ADD_STAT(memviBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level4:       |--Mem VectorIndexed Bound"),
+      ADD_STAT(storeBound, statistics::units::Rate<
+                    statistics::units::Count, statistics::units::Cycle>::get(),
+               "Level3:    |--Store Bound")
+{
+    auto& committedInsts = cpu->commitStats[0]->numInsts;
+    auto issueWidth = cpu->iew.getIssueWidth();
+    baseRetiring = committedInsts / (issueWidth * cpu->baseStats.numCycles);
+
+    frontendBound = cpu->fetch.getFetchStats().fetchBubbles /
+        (issueWidth * cpu->baseStats.numCycles);
+
+    frontendLatencyBound = cpu->fetch.getFetchStats().fetchBubbles_max / cpu->baseStats.numCycles;
+
+    frontendBandwidthBound = frontendBound - frontendLatencyBound;
+
+    // badSpecBound = (INST_SPEC - INST_RETIRED + RECOVERY_BUBBLE)
+    //                 (IssueBW * CPU_CYCLES)
+    badSpecBound = (cpu->iew.getIEWStats().dispatchedInsts -
+                    committedInsts + cpu->commit.getStats().recoveryBubbles) /
+                    (issueWidth * cpu->baseStats.numCycles);
+
+    // branchMissPrediction = Bad Speculation * BR_MIS_PRED/TOTAL_FLUSH
+    branchMissPrediction = badSpecBound *
+                           cpu->commit.getStats().branchMispredicts /
+                           cpu->commit.getStats().totalSquash;
+
+    machineClears = badSpecBound - branchMissPrediction;
+
+    backendBound = 1 - (frontendBound + badSpecBound + baseRetiring);
+
+    const auto &iqStats = cpu->iew.instQueue.backendStats;
+    // Calculate raw proportions first
+    auto& rawTotal = iqStats.exec_stall_cycle;
+    auto rawMemory = iqStats.memstall_any_load + iqStats.memstall_any_store;
+    auto rawCore   = rawTotal - rawMemory;
+
+    // Scale Level 2: ensure Core + Memory = Backend
+    coreBound   = backendBound * rawCore   / rawTotal;
+    memoryBound = backendBound * rawMemory / rawTotal;
+
+    // Scale Level 3: ensure sub-components sum to Memory
+    auto rawL1 = iqStats.memstall_any_load - iqStats.memstall_l1miss;
+    auto rawL2 = iqStats.memstall_l1miss - iqStats.memstall_l2miss;
+    auto rawL3 = iqStats.memstall_l2miss - iqStats.memstall_l3miss;
+    auto rawL3Total = rawL1 + rawL2 + rawL3 + iqStats.memstall_l3miss + iqStats.memstall_any_store;
+
+    l1Bound = memoryBound * rawL1 / rawL3Total;
+    l2Bound = memoryBound * rawL2 / rawL3Total;
+    l3Bound = memoryBound * rawL3 / rawL3Total;
+    memBound = memoryBound * iqStats.memstall_l3miss / rawL3Total;
+    storeBound = memoryBound * iqStats.memstall_any_store / rawL3Total;
+
+    // Scale Level 4: ensure sub-components sum to lnBound
+    //   4.1 l1Bound
+    auto rawL1s   = iqStats.memstall_anymiss_s   - iqStats.memstall_l1miss_s;
+    auto rawL1vus = iqStats.memstall_anymiss_vus - iqStats.memstall_l1miss_vus;
+    auto rawL1vs  = iqStats.memstall_anymiss_vs  - iqStats.memstall_l1miss_vs;
+    auto rawL1vi  = iqStats.memstall_anymiss_vi  - iqStats.memstall_l1miss_vi;
+    auto rawL1BTotal = rawL1vi + rawL1vs + rawL1vus + rawL1s;
+    l1sBound   = l1Bound * rawL1s   / rawL1BTotal;
+    l1vusBound = l1Bound * rawL1vus / rawL1BTotal;
+    l1vsBound  = l1Bound * rawL1vs  / rawL1BTotal;
+    l1viBound  = l1Bound * rawL1vi  / rawL1BTotal;
+    //   4.2 l2Bound
+    auto rawL2s   = iqStats.memstall_l1miss_s   - iqStats.memstall_l2miss_s;
+    auto rawL2vus = iqStats.memstall_l1miss_vus - iqStats.memstall_l2miss_vus;
+    auto rawL2vs  = iqStats.memstall_l1miss_vs  - iqStats.memstall_l2miss_vs;
+    auto rawL2vi  = iqStats.memstall_l1miss_vi  - iqStats.memstall_l2miss_vi;
+    auto rawL2BTotal = rawL2vi + rawL2vs + rawL2vus + rawL2s;
+    l2sBound   = l2Bound * rawL2s   / rawL2BTotal;
+    l2vusBound = l2Bound * rawL2vus / rawL2BTotal;
+    l2vsBound  = l2Bound * rawL2vs  / rawL2BTotal;
+    l2viBound  = l2Bound * rawL2vi  / rawL2BTotal;
+    //   4.3 l3Bound
+    auto rawL3s   = iqStats.memstall_l2miss_s   - iqStats.memstall_l3miss_s;
+    auto rawL3vus = iqStats.memstall_l2miss_vus - iqStats.memstall_l3miss_vus;
+    auto rawL3vs  = iqStats.memstall_l2miss_vs  - iqStats.memstall_l3miss_vs;
+    auto rawL3vi  = iqStats.memstall_l2miss_vi  - iqStats.memstall_l3miss_vi;
+    auto rawL3BTotal = rawL3vi + rawL3vs + rawL3vus + rawL3s;
+    l3sBound   = l3Bound * rawL3s   / rawL3BTotal;
+    l3vusBound = l3Bound * rawL3vus / rawL3BTotal;
+    l3vsBound  = l3Bound * rawL3vs  / rawL3BTotal;
+    l3viBound  = l3Bound * rawL3vi  / rawL3BTotal;
+    //   4.4 memBound
+    auto& rawmems   = iqStats.memstall_l3miss_s;
+    auto& rawmemvus = iqStats.memstall_l3miss_vus;
+    auto& rawmemvs  = iqStats.memstall_l3miss_vs;
+    auto& rawmemvi  = iqStats.memstall_l3miss_vi;
+    auto rawmemBTotal = rawmemvi + rawmemvs + rawmemvus + rawmems;
+    memsBound   = memBound * rawmems   / rawmemBTotal;
+    memvusBound = memBound * rawmemvus / rawmemBTotal;
+    memvsBound  = memBound * rawmemvs  / rawmemBTotal;
+    memviBound  = memBound * rawmemvi  / rawmemBTotal;
 }
 
 void

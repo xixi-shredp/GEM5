@@ -341,6 +341,13 @@ class Fetch
      * as many instructions as possible.
      */
     void tick();
+  
+    /**
+     * measure frontend performance bubbles
+     * @param insts_to_decode number of instructions to send to decode stage
+     * @param tid thread ID
+     */
+    void measureFrontendBubbles(unsigned insts_to_decode, ThreadID tid);
 
     /** Checks all input signals and updates the status as necessary.
      *  @return: Returns if the status has changed due to input signals.
@@ -364,6 +371,8 @@ class Fetch
     InstDecoder *decoder[MaxThreads];
 
     RequestPort &getInstPort() { return icachePort; }
+  
+    auto& getFetchStats() { return fetchStats; }
 
   private:
     DynInstPtr buildInst(ThreadID tid, StaticInstPtr staticInst,
@@ -581,6 +590,10 @@ class Fetch
         statistics::Formula idleRate;
         /*Number of fetch target processed per cycle*/
         statistics::Distribution ftNumber;
+        /** Unutilized issue-pipeline slots while there is no backend-stall */
+        statistics::Scalar fetchBubbles;
+        /** Cycles that fetch 0 instruction while there is no backend-stall */
+        statistics::Scalar fetchBubbles_max;
     } fetchStats;
 };
 
