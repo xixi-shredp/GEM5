@@ -145,6 +145,125 @@ class SimpleBTB(BranchTargetBuffer):
     )
 
 
+class SegmentedBTB(BranchTargetBuffer):
+    type = "SegmentedBTB"
+    cxx_class = "gem5::branch_prediction::SegmentedBTB"
+    cxx_header = "cpu/pred/segmented_btb.hh"
+
+    instShiftAmt = Param.Unsigned(
+        Parent.instShiftAmt, "Number of bits to shift instructions by"
+    )
+
+    rmTCThrshold = Param.Unsigned(
+        4,
+        "Usefulness Counter Threshold for Hot Cache"
+        + "to remove Target Cache Entry.",
+    )
+    hcReplThrshold = Param.Unsigned(
+        0, "Usefulness Counter Threshold for Hot Cache to be evicted."
+    )
+    tc2hcThrshold = Param.Unsigned(
+        4,
+        "Usefulness Counter Threshold for Target Cache"
+        + "to allocate Hot Cache Entry.",
+    )
+    bmEntries = Param.Unsigned(8192, "Number of BTB Monitor entries")
+    bmTagBits = Param.Unsigned(16, "Size of the BTB Monitor tags, in bits")
+    bmAssoc = Param.Unsigned(8, "BTB Monitor associativity")
+    bmReplPolicy = Param.BaseReplacementPolicy(
+        LRURP(), "BTB Monitor replacement policy"
+    )
+    bmIndexingPolicy = Param.BTBIndexingPolicy(
+        BTBSetAssociative(
+            assoc=Parent.bmAssoc,
+            num_entries=Parent.bmEntries,
+            set_shift=Parent.instShiftAmt,
+            tag_bits=Parent.bmTagBits,
+            numThreads=1,
+        ),
+        "BTB Monitor indexing policy",
+    )
+
+    pageCacheEntries = Param.Unsigned(512, "Number of Page Cache Entries")
+    pageCacheAssoc = Param.Unsigned(2, "Page Cache associativity")
+    # 64 - 12 - log2(pageCacheSets) = 52 - log2(256) = 52 - 8 = 44
+    pageCacheTagBits = Param.Unsigned(
+        44, "Size of the Page Cache tags, in bits"
+    )
+    pageCacheReplPolicy = Param.BaseReplacementPolicy(
+        LRURP(), "Page Cache replacement policy"
+    )
+    pageCacheIndexingPolicy = Param.BTBIndexingPolicy(
+        BTBSetAssociative(
+            assoc=Parent.pageCacheAssoc,
+            num_entries=Parent.pageCacheEntries,
+            set_shift=0,
+            tag_bits=Parent.pageCacheTagBits,
+            numThreads=1,
+        ),
+        "Page Cache indexing policy",
+    )
+
+    offsetCacheEntries = Param.Unsigned(768, "Number of Offset Cache Entries")
+    offsetCacheAssoc = Param.Unsigned(3, "Offset Cache associativity")
+    # 12 - log2(offsetCacheSets) = 12 - log2(256) = 12 - 8 = 4
+    offsetCacheTagBits = Param.Unsigned(
+        4, "Size of the Offset Cache tags, in bits"
+    )
+    offsetCacheReplPolicy = Param.BaseReplacementPolicy(
+        LRURP(), "Offset Cache replacement policy"
+    )
+    offsetCacheIndexingPolicy = Param.BTBIndexingPolicy(
+        BTBSetAssociative(
+            assoc=Parent.offsetCacheAssoc,
+            num_entries=Parent.offsetCacheEntries,
+            set_shift=0,
+            tag_bits=Parent.offsetCacheTagBits,
+            numThreads=1,
+        ),
+        "Offset Cache indexing policy",
+    )
+
+    deltaCacheEntries = Param.Unsigned(512, "Number of Delta Cache Entries")
+    deltaCacheAssoc = Param.Unsigned(2, "Delta Cache associativity")
+    # 12 - log2(offsetCacheSets) = 12 - log2(256) = 12 - 8 = 4
+    deltaCacheTagBits = Param.Unsigned(
+        4, "Size of the Delta Cache tags, in bits"
+    )
+    deltaCacheReplPolicy = Param.BaseReplacementPolicy(
+        LRURP(), "Delta Cache replacement policy"
+    )
+    deltaCacheIndexingPolicy = Param.BTBIndexingPolicy(
+        BTBSetAssociative(
+            assoc=Parent.deltaCacheAssoc,
+            num_entries=Parent.deltaCacheEntries,
+            set_shift=0,
+            tag_bits=Parent.deltaCacheTagBits,
+            numThreads=1,
+        ),
+        "Delta Cache indexing policy",
+    )
+
+    targetCacheEntries = Param.Unsigned(4096, "Number of Target Cache entries")
+    targetCacheTagBits = Param.Unsigned(
+        16, "Size of the Target Cache tags, in bits"
+    )
+    targetCacheAssoc = Param.Unsigned(4, "Target Cache associativity")
+    targetCacheReplPolicy = Param.BaseReplacementPolicy(
+        LRURP(), "Target Cache replacement policy"
+    )
+    targetCacheIndexingPolicy = Param.BTBIndexingPolicy(
+        BTBSetAssociative(
+            assoc=Parent.targetCacheAssoc,
+            num_entries=Parent.targetCacheEntries,
+            set_shift=Parent.instShiftAmt,
+            tag_bits=Parent.targetCacheTagBits,
+            numThreads=1,
+        ),
+        "Target Cache indexing policy",
+    )
+
+
 class ConditionalPredictor(SimObject):
     type = "ConditionalPredictor"
     cxx_class = "gem5::branch_prediction::ConditionalPredictor"
