@@ -87,6 +87,10 @@ def bitfield FD <11:7>;
 def bitfield FS1 <19:15>;
 def bitfield FS2 <24:20>;
 def bitfield FS3 <31:27>;
+def bitfield MD <17:15>;
+def bitfield MS1 <20:18>;
+def bitfield MS2 <23:21>;
+def bitfield MREG <9:7>;
 
 def bitfield ROUND_MODE <14:12>;
 def bitfield CONV_SGN <24:20>;
