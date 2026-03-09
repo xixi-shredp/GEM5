@@ -138,6 +138,11 @@ class Matrix_Unit(FUDesc):
         OpDesc(opClass="Matrix"),
         OpDesc(opClass="MatrixMov"),
         OpDesc(opClass="MatrixOP"),
+        OpDesc(opClass="MatrixLoad"),
+        OpDesc(opClass="MatrixStore"),
+        OpDesc(opClass="MatrixMacInt"),
+        OpDesc(opClass="MatrixMacFp"),
+        OpDesc(opClass="MatrixZero"),
     ]
     count = 1
 

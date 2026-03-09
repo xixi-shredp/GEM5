@@ -95,6 +95,9 @@ class RiscvISA(BaseISA):
     riscv_type = Param.RiscvType("RV64", "RV32 or RV64")
 
     enable_rvv = Param.Bool(True, "Enable vector extension")
+    enable_quadrilatero_matrix = Param.Bool(
+        True, "Enable Quadrilatero matrix custom extension"
+    )
     vlen = Param.RiscvVectorLength(
         256,
         "Length of each vector register in bits. \

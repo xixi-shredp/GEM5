@@ -294,13 +294,15 @@ namespace
 RegClass vecElemClass(VecElemClass, VecElemClassName, 0, debug::IntRegs);
 RegClass vecPredRegClass(VecPredRegClass, VecPredRegClassName, 0,
         debug::IntRegs);
-RegClass matRegClass(MatRegClass, MatRegClassName, 0, debug::MatRegs);
+RegClass matRegClass(MatRegClass, MatRegClassName, 8, debug::MatRegs);
 RegClass ccRegClass(CCRegClass, CCRegClassName, 0, debug::IntRegs);
 
 } // anonymous namespace
 
 ISA::ISA(const Params &p) : BaseISA(p, "riscv"),
-    _rvType(p.riscv_type), enableRvv(p.enable_rvv), vlen(p.vlen), elen(p.elen),
+    _rvType(p.riscv_type), enableRvv(p.enable_rvv),
+    enableQuadrilateroMatrix(p.enable_quadrilatero_matrix),
+    vlen(p.vlen), elen(p.elen),
     _privilegeModeSet(p.privilege_mode_set),
     _wfiResumeOnPending(p.wfi_resume_on_pending), _enableZcd(p.enable_Zcd),
     _enableSmrnmi(p.enable_Smrnmi)

@@ -79,6 +79,7 @@ class ISA : public BaseISA
     RiscvType _rvType;
     std::vector<RegVal> miscRegFile;
     bool enableRvv;
+    const bool enableQuadrilateroMatrix;
 
     bool hpmCounterEnabled(int counter) const;
 
@@ -185,6 +186,10 @@ class ISA : public BaseISA
     RiscvType rvType() const { return _rvType; }
 
     bool getEnableRvv() const { return enableRvv; }
+    bool getEnableQuadrilateroMatrix() const
+    {
+        return enableQuadrilateroMatrix;
+    }
 
     bool virtualizationEnabled() const;
 
