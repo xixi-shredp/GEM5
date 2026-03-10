@@ -299,6 +299,7 @@ Fetch::clearStates(ThreadID tid)
     set(pc[tid], cpu->pcState(tid));
     fetchOffset[tid] = 0;
     macroop[tid] = NULL;
+    macroDynState[tid] = nullptr;
     delayedCommit[tid] = false;
     memReq[tid] = NULL;
     stalls[tid].decode = false;
@@ -333,6 +334,7 @@ Fetch::resetStage()
         set(pc[tid], cpu->pcState(tid));
         fetchOffset[tid] = 0;
         macroop[tid] = NULL;
+        macroDynState[tid] = nullptr;
 
         delayedCommit[tid] = false;
         memReq[tid] = NULL;
@@ -716,10 +718,13 @@ Fetch::doSquash(const PCStateBase &new_pc, const DynInstPtr squashInst,
     set(pc[tid], new_pc);
     fetchOffset[tid] = 0;
     if (squashInst && squashInst->pcState().instAddr() == new_pc.instAddr() &&
-        !squashInst->isLastMicroop())
+        !squashInst->isLastMicroop()) {
         macroop[tid] = squashInst->macroop;
-    else
+        macroDynState[tid] = squashInst->macroDynState;
+    } else {
         macroop[tid] = NULL;
+        macroDynState[tid] = nullptr;
+    }
     decoder[tid]->reset();
 
     // Clear the icache miss if it's outstanding.
@@ -1015,7 +1020,8 @@ Fetch::buildInst(ThreadID tid, StaticInstPtr staticInst,
 
     // Create a new DynInst from the instruction fetched.
     DynInstPtr instruction = new (arrays) DynInst(
-            arrays, staticInst, curMacroop, this_pc, next_pc, seq, cpu);
+            arrays, staticInst, curMacroop, macroDynState[tid],
+            this_pc, next_pc, seq, cpu);
     instruction->setTid(tid);
 
     instruction->setThreadState(cpu->thread[tid]);
@@ -1250,6 +1256,8 @@ Fetch::fetch(bool &status_change)
 
                     if (staticInst->isMacroop()) {
                         curMacroop = staticInst;
+                        macroDynState[tid] =
+                            std::make_shared<MacroDynState>();
                     } else {
                         pcOffset = 0;
                     }
@@ -1310,6 +1318,7 @@ Fetch::fetch(bool &status_change)
                 blkOffset = (fetchAddr - fetchBufferPC[tid]) / instSize;
                 pcOffset = 0;
                 curMacroop = NULL;
+                macroDynState[tid] = nullptr;
             }
 
             // Check if the PC exceed the fetch target.
@@ -1381,6 +1390,9 @@ Fetch::fetch(bool &status_change)
     }
 
     macroop[tid] = curMacroop;
+    if (!curMacroop) {
+        macroDynState[tid] = nullptr;
+    }
     fetchOffset[tid] = pcOffset;
 
     if (numInst > 0) {

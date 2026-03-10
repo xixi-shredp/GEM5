@@ -54,12 +54,15 @@ namespace o3
 {
 
 DynInst::DynInst(const Arrays &arrays, const StaticInstPtr &static_inst,
-        const StaticInstPtr &_macroop, InstSeqNum seq_num, CPU *_cpu)
+        const StaticInstPtr &_macroop,
+        std::shared_ptr<MacroDynState> macro_dyn_state,
+        InstSeqNum seq_num, CPU *_cpu)
     : seqNum(seq_num), staticInst(static_inst), cpu(_cpu),
       _numSrcs(arrays.numSrcs), _numDests(arrays.numDests),
       _flatDestIdx(arrays.flatDestIdx), _destIdx(arrays.destIdx),
       _prevDestIdx(arrays.prevDestIdx), _srcIdx(arrays.srcIdx),
-      _readySrcIdx(arrays.readySrcIdx), macroop(_macroop)
+      _readySrcIdx(arrays.readySrcIdx), macroop(_macroop),
+      macroDynState(std::move(macro_dyn_state))
 {
     std::fill(_readySrcIdx, _readySrcIdx + (numSrcs() + 7) / 8, 0);
 
@@ -93,17 +96,22 @@ DynInst::DynInst(const Arrays &arrays, const StaticInstPtr &static_inst,
 }
 
 DynInst::DynInst(const Arrays &arrays, const StaticInstPtr &static_inst,
-        const StaticInstPtr &_macroop, const PCStateBase &_pc,
+        const StaticInstPtr &_macroop,
+        std::shared_ptr<MacroDynState> macro_dyn_state,
+        const PCStateBase &_pc,
         const PCStateBase &pred_pc, InstSeqNum seq_num, CPU *_cpu)
-    : DynInst(arrays, static_inst, _macroop, seq_num, _cpu)
+    : DynInst(arrays, static_inst, _macroop, std::move(macro_dyn_state),
+              seq_num, _cpu)
 {
     set(pc, _pc);
     set(predPC, pred_pc);
 }
 
 DynInst::DynInst(const Arrays &arrays, const StaticInstPtr &_staticInst,
-        const StaticInstPtr &_macroop)
-    : DynInst(arrays, _staticInst, _macroop, 0, nullptr)
+        const StaticInstPtr &_macroop,
+        std::shared_ptr<MacroDynState> macro_dyn_state)
+    : DynInst(arrays, _staticInst, _macroop, std::move(macro_dyn_state),
+              0, nullptr)
 {}
 
 /*

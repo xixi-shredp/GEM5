@@ -70,6 +70,7 @@ namespace o3
 {
 
 class CPU;
+struct MacroDynState;
 
 /**
  * Fetch class handles both single threaded and SMT fetch. Its
@@ -362,6 +363,8 @@ class Fetch
 
     /** The decoder. */
     InstDecoder *decoder[MaxThreads];
+
+    std::shared_ptr<MacroDynState> macroDynState[MaxThreads];
 
     RequestPort &getInstPort() { return icachePort; }
 

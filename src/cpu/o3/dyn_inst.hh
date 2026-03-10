@@ -46,6 +46,7 @@
 #include <array>
 #include <deque>
 #include <list>
+#include <memory>
 #include <string>
 
 #include "base/refcnt.hh"
@@ -72,10 +73,16 @@ class Packet;
 namespace o3
 {
 
+struct MacroDynState
+{
+    std::shared_ptr<void> auxData;
+};
+
 class DynInst : public ExecContext, public RefCounted
 {
   private:
     DynInst(const StaticInstPtr &staticInst, const StaticInstPtr &macroop,
+            std::shared_ptr<MacroDynState> macro_dyn_state,
             InstSeqNum seq_num, CPU *cpu);
 
   public:
@@ -99,15 +106,20 @@ class DynInst : public ExecContext, public RefCounted
 
     /** BaseDynInst constructor given a binary instruction. */
     DynInst(const Arrays &arrays, const StaticInstPtr &staticInst,
-            const StaticInstPtr &macroop, InstSeqNum seq_num, CPU *cpu);
+            const StaticInstPtr &macroop,
+            std::shared_ptr<MacroDynState> macro_dyn_state,
+            InstSeqNum seq_num, CPU *cpu);
 
     DynInst(const Arrays &arrays, const StaticInstPtr &staticInst,
-            const StaticInstPtr &macroop, const PCStateBase &pc,
+            const StaticInstPtr &macroop,
+            std::shared_ptr<MacroDynState> macro_dyn_state,
+            const PCStateBase &pc,
             const PCStateBase &pred_pc, InstSeqNum seq_num, CPU *cpu);
 
     /** BaseDynInst constructor given a static inst pointer. */
     DynInst(const Arrays &arrays, const StaticInstPtr &_staticInst,
-            const StaticInstPtr &_macroop);
+            const StaticInstPtr &_macroop,
+            std::shared_ptr<MacroDynState> macro_dyn_state = nullptr);
 
     ~DynInst();
 
@@ -128,6 +140,9 @@ class DynInst : public ExecContext, public RefCounted
 
     /** Pointer to the Impl's CPU object. */
     CPU *cpu = nullptr;
+
+    /** Shared dynamic state for all microops of one fetched macroop. */
+    std::shared_ptr<MacroDynState> macroDynState;
 
     BaseCPU *getCpuPtr() { return cpu; }
 

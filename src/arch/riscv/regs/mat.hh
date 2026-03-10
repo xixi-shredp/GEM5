@@ -35,6 +35,8 @@
 #include <memory>
 
 #include "arch/arm/matrix.hh"
+#include "cpu/exec_context.hh"
+#include "cpu/o3/dyn_inst.hh"
 #include "cpu/reg_class.hh"
 #include "debug/MatRegs.hh"
 
@@ -64,13 +66,15 @@ using MatRowBytes = std::array<uint8_t, MatRowByteCount>;
 
 struct MatLoadState
 {
-    MatRegContainer tile;
-};
+    MatRegContainer tile = {};
+    std::array<bool, MatRowCount> valid = {};
 
-struct MatStoreState
-{
-    std::array<MatRowBytes, MatRowCount> rows = {};
-    bool initialized = false;
+    void
+    reset()
+    {
+        tile = MatRegContainer();
+        valid.fill(false);
+    }
 };
 
 inline TypedRegClassOps<RiscvISA::MatRegContainer> matRegClassOps;
@@ -137,6 +141,27 @@ deserializeMatWordRow(const MatRowBytes &bytes, MatRegContainer &reg,
             (static_cast<uint32_t>(bytes[byte_base + 2]) << 16) |
             (static_cast<uint32_t>(bytes[byte_base + 3]) << 24);
     }
+}
+
+inline MatLoadState &
+getOrCreateMatLoadState(ExecContext *xc,
+                        std::shared_ptr<MatLoadState> &fallback)
+{
+    if (auto *dyn = dynamic_cast<o3::DynInst *>(xc)) {
+        if (dyn->macroDynState) {
+            if (!dyn->macroDynState->auxData) {
+                dyn->macroDynState->auxData =
+                    std::make_shared<MatLoadState>();
+            }
+            return *std::static_pointer_cast<MatLoadState>(
+                dyn->macroDynState->auxData);
+        }
+    }
+
+    if (!fallback) {
+        fallback = std::make_shared<MatLoadState>();
+    }
+    return *fallback;
 }
 
 } // namespace RiscvISA

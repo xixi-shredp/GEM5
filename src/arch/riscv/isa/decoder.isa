@@ -6028,10 +6028,10 @@ decode QUADRANT default Unknown::unknown() {
                         0x00: MatrixOp::fmmacc_b({{
                             for (int i = 0; i < 4; ++i) {
                                 auto acc_row = getHSlice<uint32_t>(Md, i);
-                                auto a_row = getHSlice<int8_t>(Ms1, i);
+                                auto a_row = getHSlice<int8_t>(Ms2, i);
                                 for (int j = 0; j < 4; ++j) {
                                     float acc = bitsToFloat(acc_row[j]);
-                                    auto b_row = getHSlice<int8_t>(Ms2, j);
+                                    auto b_row = getHSlice<int8_t>(Ms1, j);
                                     for (int k = 0; k < 16; ++k) {
                                         acc += static_cast<float>(a_row[k]) *
                                                static_cast<float>(b_row[k]);
@@ -6043,10 +6043,10 @@ decode QUADRANT default Unknown::unknown() {
                         0x08: MatrixOp::fmmacc_h({{
                             for (int i = 0; i < 4; ++i) {
                                 auto acc_row = getHSlice<uint32_t>(Md, i);
-                                auto a_row = getHSlice<uint16_t>(Ms1, i);
+                                auto a_row = getHSlice<uint16_t>(Ms2, i);
                                 for (int j = 0; j < 4; ++j) {
                                     float acc = bitsToFloat(acc_row[j]);
-                                    auto b_row = getHSlice<uint16_t>(Ms2, j);
+                                    auto b_row = getHSlice<uint16_t>(Ms1, j);
                                     for (int k = 0; k < 8; ++k) {
                                         float a = bitsToFloat(
                                             f16_to_f32(f16(a_row[k])).v);
@@ -6061,10 +6061,10 @@ decode QUADRANT default Unknown::unknown() {
                         0x10: MatrixOp::fmmacc_s({{
                             for (int i = 0; i < 4; ++i) {
                                 auto acc_row = getHSlice<uint32_t>(Md, i);
-                                auto a_row = getHSlice<uint32_t>(Ms1, i);
+                                auto a_row = getHSlice<uint32_t>(Ms2, i);
                                 for (int j = 0; j < 4; ++j) {
                                     float acc = bitsToFloat(acc_row[j]);
-                                    auto b_row = getHSlice<uint32_t>(Ms2, j);
+                                    auto b_row = getHSlice<uint32_t>(Ms1, j);
                                     for (int k = 0; k < 4; ++k) {
                                         acc += bitsToFloat(a_row[k]) *
                                                bitsToFloat(b_row[k]);
@@ -6091,9 +6091,9 @@ decode QUADRANT default Unknown::unknown() {
                         0x00: MatrixOp::mmaqa_b({{
                             for (int i = 0; i < 4; ++i) {
                                 auto acc_row = getHSlice<int32_t>(Md, i);
-                                auto a_row = getHSlice<int8_t>(Ms1, i);
+                                auto a_row = getHSlice<int8_t>(Ms2, i);
                                 for (int j = 0; j < 4; ++j) {
-                                    auto b_row = getHSlice<int8_t>(Ms2, j);
+                                    auto b_row = getHSlice<int8_t>(Ms1, j);
                                     int32_t acc = acc_row[j];
                                     for (int k = 0; k < 16; ++k) {
                                         acc += a_row[k] * b_row[k];
@@ -6108,9 +6108,9 @@ decode QUADRANT default Unknown::unknown() {
                         0x08: MatrixOp::mmada_h({{
                             for (int i = 0; i < 4; ++i) {
                                 auto acc_row = getHSlice<int32_t>(Md, i);
-                                auto a_row = getHSlice<int16_t>(Ms1, i);
+                                auto a_row = getHSlice<int16_t>(Ms2, i);
                                 for (int j = 0; j < 4; ++j) {
-                                    auto b_row = getHSlice<int16_t>(Ms2, j);
+                                    auto b_row = getHSlice<int16_t>(Ms1, j);
                                     int32_t acc = acc_row[j];
                                     for (int k = 0; k < 8; ++k) {
                                         acc += a_row[k] * b_row[k];
@@ -6125,9 +6125,9 @@ decode QUADRANT default Unknown::unknown() {
                         0x10: MatrixOp::mmasa_w({{
                             for (int i = 0; i < 4; ++i) {
                                 auto acc_row = getHSlice<int32_t>(Md, i);
-                                auto a_row = getHSlice<int32_t>(Ms1, i);
+                                auto a_row = getHSlice<int32_t>(Ms2, i);
                                 for (int j = 0; j < 4; ++j) {
-                                    auto b_row = getHSlice<int32_t>(Ms2, j);
+                                    auto b_row = getHSlice<int32_t>(Ms1, j);
                                     int32_t acc = acc_row[j];
                                     for (int k = 0; k < 4; ++k) {
                                         acc += a_row[k] * b_row[k];

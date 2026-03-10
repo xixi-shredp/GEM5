@@ -819,7 +819,8 @@ LSQ::pushRequest(const DynInstPtr& inst, bool isLoad, uint8_t *data,
             if (isLoad)
                 fault = read(request, inst->lqIdx);
             else
-                fault = write(request, data, inst->sqIdx);
+                fault = write(request, request->_data ? request->_data : data,
+                              inst->sqIdx);
             // inst->getFault() may have the first-fault of a
             // multi-access split request at this point.
             // Overwrite that only if we got another type of fault
@@ -1057,6 +1058,11 @@ LSQ::LSQRequest::LSQRequest(
               _inst->isStoreConditional() || _inst->isAtomic() ||
               _inst->isLoad());
     flags.set(Flag::IsAtomic, _inst->isAtomic());
+    if (!isLoad && data && size) {
+        _data = new uint8_t[size];
+        std::memcpy(_data, data, size);
+        flags.set(Flag::OwnsData);
+    }
     install();
 }
 
@@ -1118,6 +1124,9 @@ LSQ::LSQRequest::~LSQRequest()
 
     for (auto r: _packets)
         delete r;
+
+    if (flags.isSet(Flag::OwnsData))
+        delete [] _data;
 };
 
 ContextID
@@ -1210,7 +1219,7 @@ LSQ::SingleDataRequest::buildPackets()
                 isLoad()
                     ?  Packet::createRead(req())
                     :  Packet::createWrite(req()));
-        _packets.back()->dataStatic(_inst->memData);
+        _packets.back()->dataStatic(isLoad() ? _inst->memData : _data);
         _packets.back()->senderState = this;
 
         // hardware transactional memory
@@ -1270,7 +1279,7 @@ LSQ::SplitDataRequest::buildPackets()
             } else {
                 uint8_t* req_data = new uint8_t[req->getSize()];
                 std::memcpy(req_data,
-                        _inst->memData + offset,
+                        _data + offset,
                         req->getSize());
                 pkt->dataDynamic(req_data);
             }

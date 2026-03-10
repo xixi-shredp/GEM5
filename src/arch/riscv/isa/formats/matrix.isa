@@ -30,7 +30,8 @@ def template MatrixDeclare {{
     class %(class_name)s : public %(base_class)s
     {
       private:
-        %(reg_idx_arr_decl)s;
+        RegId srcRegIdxArr[3];
+        RegId destRegIdxArr[1];
 
       public:
         %(class_name)s(ExtMachInst machInst);
@@ -38,6 +39,21 @@ def template MatrixDeclare {{
         std::string generateDisassembly(
             Addr pc, const loader::SymbolTable *symtab) const override;
     };
+}};
+
+def template MatrixConstructor {{
+    %(class_name)s::%(class_name)s(ExtMachInst machInst)
+        : %(base_class)s("%(mnemonic)s", machInst, %(op_class)s)
+    {
+        setRegIdxArrays(
+            reinterpret_cast<RegIdArrayPtr>(
+                &std::remove_pointer_t<decltype(this)>::srcRegIdxArr),
+            reinterpret_cast<RegIdArrayPtr>(
+                &std::remove_pointer_t<decltype(this)>::destRegIdxArr));
+        %(constructor)s;
+        setDestRegIdx(_numDestRegs++, matRegClass[MD]);
+        _numTypedDestRegs[matRegClass.type()]++;
+    }
 }};
 
 def template MatrixMacroDeclare {{
@@ -76,7 +92,7 @@ def template MatrixExecute {{
         %(op_decl)s;
         %(op_rd)s;
         %(code)s;
-        %(op_wb)s;
+        xc->setRegOperand(this, 0, &Md);
         return NoFault;
     }
 
@@ -94,7 +110,7 @@ def template MatrixLoadRowMicroDeclare {{
       public:
         %(class_name)s(
             ExtMachInst machInst, uint8_t rowIdx,
-            std::shared_ptr<RiscvISA::MatLoadState> state,
+            std::shared_ptr<RiscvISA::MatLoadState> fallbackState,
             bool commitResult);
 
         Fault execute(ExecContext *, trace::InstRecord *) const override;
@@ -105,10 +121,11 @@ def template MatrixLoadRowMicroDeclare {{
             Addr, const loader::SymbolTable *) const override;
 
       private:
-        RegId srcRegIdxArr[2];
+        RegId srcRegIdxArr[3];
         RegId destRegIdxArr[1];
+        Request::Flags memAccessFlags;
         const uint8_t rowIdx;
-        const std::shared_ptr<RiscvISA::MatLoadState> state;
+        const std::shared_ptr<RiscvISA::MatLoadState> fallbackState;
         const bool commitResult;
     };
 }};
@@ -116,10 +133,10 @@ def template MatrixLoadRowMicroDeclare {{
 def template MatrixLoadRowMicroConstructor {{
     %(class_name)s::%(class_name)s(
         ExtMachInst machInst, uint8_t rowIdx,
-        std::shared_ptr<RiscvISA::MatLoadState> state,
+        std::shared_ptr<RiscvISA::MatLoadState> fallbackState,
         bool commitResult)
         : %(base_class)s("%(mnemonic)s", machInst, %(op_class)s),
-          rowIdx(rowIdx), state(std::move(state)),
+          rowIdx(rowIdx), fallbackState(std::move(fallbackState)),
           commitResult(commitResult)
     {
         setRegIdxArrays(
@@ -127,12 +144,13 @@ def template MatrixLoadRowMicroConstructor {{
                 &std::remove_pointer_t<decltype(this)>::srcRegIdxArr),
             reinterpret_cast<RegIdArrayPtr>(
                 &std::remove_pointer_t<decltype(this)>::destRegIdxArr));
+        if (rowIdx != 0) {
+            setSrcRegIdx(_numSrcRegs++, matRegClass[MREG]);
+        }
         setSrcRegIdx(_numSrcRegs++, intRegClass[machInst.rs1]);
         setSrcRegIdx(_numSrcRegs++, intRegClass[machInst.rs2]);
-        if (commitResult) {
-            setDestRegIdx(_numDestRegs++, matRegClass[MREG]);
-            _numTypedDestRegs[matRegClass.type()]++;
-        }
+        setDestRegIdx(_numDestRegs++, matRegClass[MREG]);
+        _numTypedDestRegs[matRegClass.type()]++;
         memAccessFlags = (Request::Flags)(%(mem_align)s);
         flags[IsLoad] = true;
         flags[IsMatrix] = true;
@@ -145,8 +163,14 @@ def template MatrixLoadRowMicroExecute {{
     %(class_name)s::execute(ExecContext *xc,
         trace::InstRecord *traceData) const
     {
-        const auto base = xc->getRegOperand(this, 0);
-        const auto stride = xc->getRegOperand(this, 1);
+        auto &state = getOrCreateMatLoadState(
+            xc, const_cast<std::shared_ptr<RiscvISA::MatLoadState> &>(
+                    fallbackState));
+        if (rowIdx == 0) {
+            state.reset();
+        }
+        const auto base = xc->getRegOperand(this, rowIdx == 0 ? 0 : 1);
+        const auto stride = xc->getRegOperand(this, rowIdx == 0 ? 1 : 2);
         const Addr ea = rvSext(base + rowIdx * stride);
         static const std::vector<bool> byte_enable(
             RiscvISA::MatRowByteCount, true);
@@ -158,10 +182,9 @@ def template MatrixLoadRowMicroExecute {{
             return fault;
         }
 
-        deserializeMatWordRow(bytes, state->tile, rowIdx);
-        if (commitResult) {
-            xc->setRegOperand(this, 0, &state->tile);
-        }
+        deserializeMatWordRow(bytes, state.tile, rowIdx);
+        state.valid[rowIdx] = true;
+        xc->setRegOperand(this, 0, &state.tile);
         return NoFault;
     }
 
@@ -169,8 +192,14 @@ def template MatrixLoadRowMicroExecute {{
     %(class_name)s::initiateAcc(ExecContext *xc,
         trace::InstRecord *traceData) const
     {
-        const auto base = xc->getRegOperand(this, 0);
-        const auto stride = xc->getRegOperand(this, 1);
+        auto &state = getOrCreateMatLoadState(
+            xc, const_cast<std::shared_ptr<RiscvISA::MatLoadState> &>(
+                    fallbackState));
+        if (rowIdx == 0) {
+            state.reset();
+        }
+        const auto base = xc->getRegOperand(this, rowIdx == 0 ? 0 : 1);
+        const auto stride = xc->getRegOperand(this, rowIdx == 0 ? 1 : 2);
         const Addr ea = rvSext(base + rowIdx * stride);
         static const std::vector<bool> byte_enable(
             RiscvISA::MatRowByteCount, true);
@@ -182,15 +211,17 @@ def template MatrixLoadRowMicroExecute {{
     %(class_name)s::completeAcc(PacketPtr pkt, ExecContext *xc,
         trace::InstRecord *traceData) const
     {
+        auto &state = getOrCreateMatLoadState(
+            xc, const_cast<std::shared_ptr<RiscvISA::MatLoadState> &>(
+                    fallbackState));
         RiscvISA::MatRowBytes bytes = {};
         const auto *pkt_data = pkt->getConstPtr<uint8_t>();
         for (std::size_t i = 0; i < RiscvISA::MatRowByteCount; ++i) {
             bytes[i] = pkt_data[i];
         }
-        deserializeMatWordRow(bytes, state->tile, rowIdx);
-        if (commitResult) {
-            xc->setRegOperand(this, 0, &state->tile);
-        }
+        deserializeMatWordRow(bytes, state.tile, rowIdx);
+        state.valid[rowIdx] = true;
+        xc->setRegOperand(this, 0, &state.tile);
         return NoFault;
     }
 
@@ -206,9 +237,7 @@ def template MatrixStoreRowMicroDeclare {{
     class %(class_name)s : public %(base_class)s
     {
       public:
-        %(class_name)s(
-            ExtMachInst machInst, uint8_t rowIdx,
-            std::shared_ptr<RiscvISA::MatStoreState> state);
+        %(class_name)s(ExtMachInst machInst, uint8_t rowIdx);
 
         Fault execute(ExecContext *, trace::InstRecord *) const override;
         Fault initiateAcc(ExecContext *, trace::InstRecord *) const override;
@@ -220,17 +249,15 @@ def template MatrixStoreRowMicroDeclare {{
       private:
         RegId srcRegIdxArr[3];
         RegId destRegIdxArr[1];
+        Request::Flags memAccessFlags;
         const uint8_t rowIdx;
-        const std::shared_ptr<RiscvISA::MatStoreState> state;
     };
 }};
 
 def template MatrixStoreRowMicroConstructor {{
-    %(class_name)s::%(class_name)s(
-        ExtMachInst machInst, uint8_t rowIdx,
-        std::shared_ptr<RiscvISA::MatStoreState> state)
+    %(class_name)s::%(class_name)s(ExtMachInst machInst, uint8_t rowIdx)
         : %(base_class)s("%(mnemonic)s", machInst, %(op_class)s),
-          rowIdx(rowIdx), state(std::move(state))
+          rowIdx(rowIdx)
     {
         setRegIdxArrays(
             reinterpret_cast<RegIdArrayPtr>(
@@ -252,22 +279,16 @@ def template MatrixStoreRowMicroExecute {{
     %(class_name)s::execute(ExecContext *xc,
         trace::InstRecord *traceData) const
     {
-        if (!state->initialized) {
-            RiscvISA::MatRegContainer tile;
-            xc->getRegOperand(this, 0, &tile);
-            for (std::size_t row = 0; row < RiscvISA::MatRowCount; ++row) {
-                state->rows[row] = serializeMatRowBytes(tile, row);
-            }
-            state->initialized = true;
-        }
-
+        RiscvISA::MatRegContainer tile;
+        xc->getRegOperand(this, 0, &tile);
+        auto rowBytes = serializeMatRowBytes(tile, rowIdx);
         const auto base = xc->getRegOperand(this, 1);
         const auto stride = xc->getRegOperand(this, 2);
         const Addr ea = rvSext(base + rowIdx * stride);
         static const std::vector<bool> byte_enable(
             RiscvISA::MatRowByteCount, true);
         return xc->writeMem(
-            const_cast<uint8_t *>(state->rows[rowIdx].data()),
+            rowBytes.data(),
             RiscvISA::MatRowByteCount, ea, memAccessFlags, nullptr,
             byte_enable);
     }
@@ -276,22 +297,16 @@ def template MatrixStoreRowMicroExecute {{
     %(class_name)s::initiateAcc(ExecContext *xc,
         trace::InstRecord *traceData) const
     {
-        if (!state->initialized) {
-            RiscvISA::MatRegContainer tile;
-            xc->getRegOperand(this, 0, &tile);
-            for (std::size_t row = 0; row < RiscvISA::MatRowCount; ++row) {
-                state->rows[row] = serializeMatRowBytes(tile, row);
-            }
-            state->initialized = true;
-        }
-
+        RiscvISA::MatRegContainer tile;
+        xc->getRegOperand(this, 0, &tile);
+        auto rowBytes = serializeMatRowBytes(tile, rowIdx);
         const auto base = xc->getRegOperand(this, 1);
         const auto stride = xc->getRegOperand(this, 2);
         const Addr ea = rvSext(base + rowIdx * stride);
         static const std::vector<bool> byte_enable(
             RiscvISA::MatRowByteCount, true);
         return xc->writeMem(
-            const_cast<uint8_t *>(state->rows[rowIdx].data()),
+            rowBytes.data(),
             RiscvISA::MatRowByteCount, ea, memAccessFlags, nullptr,
             byte_enable);
     }
@@ -314,17 +329,17 @@ def template MatrixStoreRowMicroExecute {{
 def format MatrixOp(code, *opt_flags) {{
     iop = InstObjParams(name, Name, 'RiscvStaticInst', code, opt_flags)
     header_output = MatrixDeclare.subst(iop)
-    decoder_output = BasicConstructor.subst(iop)
+    decoder_output = MatrixConstructor.subst(iop)
     decode_block = BasicDecode.subst(iop)
     exec_output = MatrixExecute.subst(iop)
 }};
 
 def format MatrixLoadMacro(mem_align, *opt_flags) {{
     microop_setup = '''
-        auto state = std::make_shared<RiscvISA::MatLoadState>();
+        auto loadState = std::make_shared<RiscvISA::MatLoadState>();
         for (uint8_t row = 0; row < RiscvISA::MatRowCount; ++row) {
             cur_inst = new %(micro_class)s(
-                machInst, row, state, row + 1 == RiscvISA::MatRowCount);
+                machInst, row, loadState, row + 1 == RiscvISA::MatRowCount);
             if (row + 1 != RiscvISA::MatRowCount) {
                 cur_inst->setDelayedCommit();
             }
@@ -341,7 +356,7 @@ def format MatrixLoadMacro(mem_align, *opt_flags) {{
     exec_output = ''
 
     micro_iop = InstObjParams(
-        f'{name}_row', f'{Name}RowMicro', 'Load',
+        f'{name}_row', f'{Name}RowMicro', 'RiscvMicroInst',
         {'mem_align': mem_align}, opt_flags)
     header_output += MatrixLoadRowMicroDeclare.subst(micro_iop)
     decoder_output += MatrixLoadRowMicroConstructor.subst(micro_iop)
@@ -350,9 +365,8 @@ def format MatrixLoadMacro(mem_align, *opt_flags) {{
 
 def format MatrixStoreMacro(mem_align, *opt_flags) {{
     microop_setup = '''
-        auto state = std::make_shared<RiscvISA::MatStoreState>();
         for (uint8_t row = 0; row < RiscvISA::MatRowCount; ++row) {
-            cur_inst = new %(micro_class)s(machInst, row, state);
+            cur_inst = new %(micro_class)s(machInst, row);
             if (row + 1 != RiscvISA::MatRowCount) {
                 cur_inst->setDelayedCommit();
             }
@@ -369,7 +383,7 @@ def format MatrixStoreMacro(mem_align, *opt_flags) {{
     exec_output = ''
 
     micro_iop = InstObjParams(
-        f'{name}_row', f'{Name}RowMicro', 'Store',
+        f'{name}_row', f'{Name}RowMicro', 'RiscvMicroInst',
         {'mem_align': mem_align}, opt_flags)
     header_output += MatrixStoreRowMicroDeclare.subst(micro_iop)
     decoder_output += MatrixStoreRowMicroConstructor.subst(micro_iop)
