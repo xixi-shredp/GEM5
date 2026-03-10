@@ -39,6 +39,7 @@ cpu_types = ("atomic", "o3")
 workloads = (
     ("quadrilatero-smoke", "quadrilatero-smoke"),
     ("quadrilatero-matmul", "quadrilatero-matmul"),
+    ("quadrilatero-store-pack", "quadrilatero-store-pack"),
     ("quadrilatero-xheep-matmul", "quadrilatero-xheep-matmul"),
 )
 
