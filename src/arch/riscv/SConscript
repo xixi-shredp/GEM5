@@ -66,6 +66,8 @@ Source('semihosting.cc', tags=['riscv isa'])
 Source('system.cc', tags=['riscv isa'])
 Source('tlb.cc', tags=['riscv isa'])
 
+GTest('mat_packing.test', 'mat_packing.test.cc', with_tag('riscv isa'))
+
 Source('linux/se_workload.cc', tags=['riscv isa'])
 Source('linux/fs_workload.cc', tags=['riscv isa'])
 

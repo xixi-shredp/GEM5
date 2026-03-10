@@ -29,6 +29,11 @@
 #ifndef __ARCH_RISCV_REGS_MAT_HH__
 #define __ARCH_RISCV_REGS_MAT_HH__
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+
 #include "arch/arm/matrix.hh"
 #include "cpu/reg_class.hh"
 #include "debug/MatRegs.hh"
@@ -51,6 +56,22 @@ template <typename ElemType>
 using MatCol = gem5::VerticalSlice<ElemType, MatRegContainer, false>;
 
 const int NumMatRegs = 8;
+inline constexpr std::size_t MatRowCount = 4;
+inline constexpr std::size_t MatWordCountPerRow = 4;
+inline constexpr std::size_t MatRowByteCount = 16;
+
+using MatRowBytes = std::array<uint8_t, MatRowByteCount>;
+
+struct MatLoadState
+{
+    MatRegContainer tile;
+};
+
+struct MatStoreState
+{
+    std::array<MatRowBytes, MatRowCount> rows = {};
+    bool initialized = false;
+};
 
 inline TypedRegClassOps<RiscvISA::MatRegContainer> matRegClassOps;
 
@@ -78,6 +99,44 @@ MatCol<ElemType>
 getVSlice(MatRegContainer &reg, uint8_t col_idx)
 {
     return reg.asVSlice<ElemType>(col_idx);
+}
+
+inline void
+serializeMatRowBytes(const MatRegContainer &reg, uint8_t row_idx,
+                     MatRowBytes &bytes)
+{
+    auto src = getHSlice<uint32_t>(const_cast<MatRegContainer &>(reg), row_idx);
+    for (std::size_t word = 0; word < MatWordCountPerRow; ++word) {
+        const auto value = src[word];
+        const auto byte_base = word * sizeof(uint32_t);
+        bytes[byte_base + 0] = bits(value, 7, 0);
+        bytes[byte_base + 1] = bits(value, 15, 8);
+        bytes[byte_base + 2] = bits(value, 23, 16);
+        bytes[byte_base + 3] = bits(value, 31, 24);
+    }
+}
+
+inline MatRowBytes
+serializeMatRowBytes(const MatRegContainer &reg, uint8_t row_idx)
+{
+    MatRowBytes bytes = {};
+    serializeMatRowBytes(reg, row_idx, bytes);
+    return bytes;
+}
+
+inline void
+deserializeMatWordRow(const MatRowBytes &bytes, MatRegContainer &reg,
+                      uint8_t row_idx)
+{
+    auto dst = getHSlice<uint32_t>(reg, row_idx);
+    for (std::size_t word = 0; word < MatWordCountPerRow; ++word) {
+        const auto byte_base = word * sizeof(uint32_t);
+        dst[word] =
+            static_cast<uint32_t>(bytes[byte_base + 0]) |
+            (static_cast<uint32_t>(bytes[byte_base + 1]) << 8) |
+            (static_cast<uint32_t>(bytes[byte_base + 2]) << 16) |
+            (static_cast<uint32_t>(bytes[byte_base + 3]) << 24);
+    }
 }
 
 } // namespace RiscvISA

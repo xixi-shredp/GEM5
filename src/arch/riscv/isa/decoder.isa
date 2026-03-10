@@ -6020,22 +6020,8 @@ decode QUADRANT default Unknown::unknown() {
             0x1: decode FUNCT3 {
                 0x0: decode FUNCT7 {
                     0x00: decode MMINOR {
-                        0x2: MatrixOp::mld_w({{
-                            for (int row = 0; row < 4; ++row) {
-                                auto dst = getHSlice<uint32_t>(Mm, row);
-                                Addr row_addr = Rs1 + row * Rs2;
-                                for (int col = 0; col < 4; ++col) {
-                                    uint32_t word = 0;
-                                    Fault fault = readMemAtomicLE(
-                                        xc, traceData, row_addr + col * 4,
-                                        word, 0);
-                                    if (fault != NoFault) {
-                                        return fault;
-                                    }
-                                    dst[col] = word;
-                                }
-                            }
-                        }}, MatrixLoadOp, IsMatrix);
+                        0x2: MatrixLoadMacro::mld_w(
+                            'MMU::WordAlign', MatrixLoadOp, IsMatrix);
                     }
 
                     0x04: decode RD {
@@ -6090,51 +6076,15 @@ decode QUADRANT default Unknown::unknown() {
                     }
 
                     0x05: decode MMINOR {
-                        0x0: MatrixOp::mst_b({{
-                            for (int row = 0; row < 4; ++row) {
-                                auto src = getHSlice<uint32_t>(Mm, row);
-                                Addr row_addr = Rs1 + row * Rs2;
-                                for (int col = 0; col < 4; ++col) {
-                                    Fault fault = writeMemAtomicLE(
-                                        xc, traceData, src[col],
-                                        row_addr + col * 4, 0, nullptr);
-                                    if (fault != NoFault) {
-                                        return fault;
-                                    }
-                                }
-                            }
-                        }}, MatrixStoreOp, IsMatrix);
-                        0x1: MatrixOp::mst_h({{
-                            for (int row = 0; row < 4; ++row) {
-                                auto src = getHSlice<uint32_t>(Mm, row);
-                                Addr row_addr = Rs1 + row * Rs2;
-                                for (int col = 0; col < 4; ++col) {
-                                    Fault fault = writeMemAtomicLE(
-                                        xc, traceData, src[col],
-                                        row_addr + col * 4, 0, nullptr);
-                                    if (fault != NoFault) {
-                                        return fault;
-                                    }
-                                }
-                            }
-                        }}, MatrixStoreOp, IsMatrix);
+                        0x0: MatrixStoreMacro::mst_b(
+                            'MMU::ByteAlign', MatrixStoreOp, IsMatrix);
+                        0x1: MatrixStoreMacro::mst_h(
+                            'MMU::HalfWordAlign', MatrixStoreOp, IsMatrix);
                     }
 
                     0x06: decode MMINOR {
-                        0x2: MatrixOp::mst_w({{
-                            for (int row = 0; row < 4; ++row) {
-                                auto src = getHSlice<uint32_t>(Mm, row);
-                                Addr row_addr = Rs1 + row * Rs2;
-                                for (int col = 0; col < 4; ++col) {
-                                    Fault fault = writeMemAtomicLE(
-                                        xc, traceData, src[col],
-                                        row_addr + col * 4, 0, nullptr);
-                                    if (fault != NoFault) {
-                                        return fault;
-                                    }
-                                }
-                            }
-                        }}, MatrixStoreOp, IsMatrix);
+                        0x2: MatrixStoreMacro::mst_w(
+                            'MMU::WordAlign', MatrixStoreOp, IsMatrix);
                     }
 
                     0x08: decode RD {
