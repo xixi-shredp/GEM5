@@ -46,6 +46,7 @@ Decoder::Decoder(const RiscvDecoderParams &p) : InstDecoder(p, &machInst)
     vlen = isa->getVecLenInBits();
     elen = isa->getVecElemLenInBits();
     _enableZcd = isa->enableZcd();
+    _enableQuadrilateroMatrix = isa->getEnableQuadrilateroMatrix();
     reset();
 }
 
@@ -168,6 +169,7 @@ Decoder::decode(PCStateBase &_next_pc)
     emi.vill    = vtype.vill;
     emi.rv_type = static_cast<int>(next_pc.rvType());
     emi.enable_zcd = _enableZcd;
+    emi.enable_quadrilatero_matrix = _enableQuadrilateroMatrix;
 
     return decode(emi, next_pc.instAddr());
 }
