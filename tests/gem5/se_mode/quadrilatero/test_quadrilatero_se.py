@@ -37,6 +37,7 @@ exit_verifier = verifier.MatchRegex(
 cpu_types = ("atomic", "o3")
 
 workloads = (
+    ("quadrilatero-fmmacc-s", "quadrilatero-fmmacc-s"),
     ("quadrilatero-mmada-h", "quadrilatero-mmada-h"),
     ("quadrilatero-mmaqa-b", "quadrilatero-mmaqa-b"),
     ("quadrilatero-smoke", "quadrilatero-smoke"),
