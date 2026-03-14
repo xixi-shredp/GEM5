@@ -184,3 +184,21 @@ class NoncoherentCache(BaseCache):
     # This is typically a last level cache and any clean
     # writebacks would be unnecessary traffic to the main memory.
     writeback_clean = False
+
+
+class IdealCache(ClockedObject):
+    type = "IdealCache"
+    cxx_class = "gem5::IdealCache"
+    cxx_header = "mem/cache/ideal_cache.hh"
+
+    cpu_side = VectorResponsePort(
+        "CPU-side ports receiving requests and sending responses"
+    )
+    mem_side = RequestPort(
+        "Memory-side port used for functional memory access"
+    )
+
+    hit_latency = Param.Latency(
+        "1ns", "Fixed latency reported for every access"
+    )
+    system = Param.System(Parent.any, "The system this ideal cache belongs to")
