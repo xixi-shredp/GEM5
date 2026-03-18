@@ -6,6 +6,8 @@
 #ifndef __MEM_IDEAL_CACHE_HH__
 #define __MEM_IDEAL_CACHE_HH__
 
+#include <list>
+#include <memory>
 #include <vector>
 
 #include "mem/port.hh"
@@ -26,14 +28,17 @@ class IdealCache : public ClockedObject
       private:
         IdealCache *owner;
         const PortID id;
-        bool needRetry = false;
         PacketPtr blockedPacket = nullptr;
 
       public:
         CPUSidePort(const std::string &name, PortID id, IdealCache *owner);
 
         bool sendPacket(PacketPtr pkt);
-        void trySendRetry();
+        bool
+        blocked() const
+        {
+            return blockedPacket != nullptr;
+        }
 
       protected:
         Tick recvAtomic(PacketPtr pkt) override;
@@ -57,11 +62,11 @@ class IdealCache : public ClockedObject
         void recvRangeChange() override;
     };
 
-    struct PendingAccess
+    struct PendingResponse
     {
-        PacketPtr pkt = nullptr;
-        PortID port = InvalidPortID;
-        bool needsResponse = false;
+        PacketPtr pkt;
+        PortID port;
+        Tick readyTick;
     };
 
     std::vector<CPUSidePort> cpuPorts;
@@ -69,16 +74,16 @@ class IdealCache : public ClockedObject
 
     const Tick hitLatency;
 
-    bool blocked = false;
-    PendingAccess pendingAccess;
-    EventFunctionWrapper releaseEvent;
+    std::list<PendingResponse> pendingResponses;
+    std::unique_ptr<Packet> pendingDelete;
+    EventFunctionWrapper sendEvent;
 
     bool handleTimingReq(PacketPtr pkt, PortID port_id);
     Tick handleAtomicReq(PacketPtr pkt);
     void handleFunctionalReq(PacketPtr pkt);
     void performIdealAccess(PacketPtr pkt);
-    void completeAccess();
-    void releaseBlocked();
+    void processReadyResponses();
+    void scheduleNextReadyResponse();
     AddrRangeList getAddrRanges() const;
 
   public:
