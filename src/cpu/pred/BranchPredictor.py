@@ -145,6 +145,12 @@ class SimpleBTB(BranchTargetBuffer):
     )
 
 
+class InfiniteBTB(BranchTargetBuffer):
+    type = "InfiniteBTB"
+    cxx_class = "gem5::branch_prediction::InfiniteBTB"
+    cxx_header = "cpu/pred/infinite_btb.hh"
+
+
 class ConditionalPredictor(SimObject):
     type = "ConditionalPredictor"
     cxx_class = "gem5::branch_prediction::ConditionalPredictor"
