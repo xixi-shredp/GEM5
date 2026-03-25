@@ -610,12 +610,16 @@ class BaseCPU : public ClockedObject
     // Function tracing
   private:
     bool functionTracingEnabled;
+    bool callStackTracingEnabled;
     std::ostream *functionTraceStream;
     Addr currentFunctionStart;
     Addr currentFunctionEnd;
     Tick functionEntryTick;
     void enableFunctionTrace();
     void traceFunctionsInternal(Addr pc);
+    void traceCallReturnInternal(
+        Addr current_pc, Addr call_target_pc, bool is_call, bool is_return,
+        bool is_uncond_ctrl);
 
   private:
     static std::vector<BaseCPU *> cpuList;   //!< Static global cpu list
@@ -626,6 +630,17 @@ class BaseCPU : public ClockedObject
     {
         if (functionTracingEnabled)
             traceFunctionsInternal(pc);
+    }
+
+    void
+    traceCallReturn(
+        Addr current_pc, Addr call_target_pc, bool is_call, bool is_return,
+        bool is_uncond_ctrl)
+    {
+        if (callStackTracingEnabled) {
+            traceCallReturnInternal(current_pc, call_target_pc, is_call,
+                is_return, is_uncond_ctrl);
+        }
     }
 
     static int numSimulatedCPUs() { return cpuList.size(); }

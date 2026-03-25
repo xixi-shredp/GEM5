@@ -45,6 +45,7 @@
 #include <set>
 #include <string>
 
+#include "arch/riscv/pcstate.hh"
 #include "base/compiler.hh"
 #include "base/loader/symtab.hh"
 #include "base/logging.hh"
@@ -1031,6 +1032,14 @@ Commit::commitInsts()
                 }
 
                 cpu->traceFunctions(pc[tid]->instAddr());
+                if (cpu->tcBase(tid)->getIsaPtr()->getIsaName() == "riscv") {
+                    const auto &pc_state =
+                        head_inst->pcState().as<RiscvISA::PCState>();
+                    cpu->traceCallReturn(
+                        pc_state.instAddr(), pc_state.npc(),
+                        head_inst->isCall(), head_inst->isReturn(),
+                        head_inst->isUncondCtrl());
+                }
 
                 head_inst->staticInst->advancePC(*pc[tid]);
 

@@ -63,6 +63,8 @@
 #include "mem/page_table.hh"
 #include "params/BaseCPU.hh"
 #include "sim/clocked_object.hh"
+#include "sim/core.hh"
+#include "sim/cur_tick.hh"
 #include "sim/full_system.hh"
 #include "sim/process.hh"
 #include "sim/root.hh"
@@ -79,6 +81,94 @@ namespace gem5
 std::unique_ptr<BaseCPU::GlobalStats> BaseCPU::globalStats;
 
 std::vector<BaseCPU *> BaseCPU::cpuList;
+
+namespace
+{
+
+std::vector<std::string> callRetTraceEvents;
+bool callRetTraceRegistered = false;
+
+std::string
+escapeJsonString(const std::string &input)
+{
+    std::ostringstream escaped;
+
+    for (const char ch : input) {
+        switch (ch) {
+          case '\\':
+            escaped << "\\\\";
+            break;
+          case '"':
+            escaped << "\\\"";
+            break;
+          case '\b':
+            escaped << "\\b";
+            break;
+          case '\f':
+            escaped << "\\f";
+            break;
+          case '\n':
+            escaped << "\\n";
+            break;
+          case '\r':
+            escaped << "\\r";
+            break;
+          case '\t':
+            escaped << "\\t";
+            break;
+          default:
+            escaped << ch;
+            break;
+        }
+    }
+
+    return escaped.str();
+}
+
+void
+writeCallRetTrace()
+{
+    if (!callRetTraceRegistered) {
+        return;
+    }
+
+    auto *stream = simout.findOrCreate("call_ret.json")->stream();
+    (*stream) << "[";
+    for (size_t i = 0; i < callRetTraceEvents.size(); ++i) {
+        if (i != 0) {
+            (*stream) << ",\n";
+        }
+        (*stream) << callRetTraceEvents[i];
+    }
+    (*stream) << "]\n";
+    stream->flush();
+}
+
+std::string
+functionSymbolForTrace(Addr pc)
+{
+    Addr current_function_end = pc + 1;
+    auto it = loader::debugSymbolTable.findNearest(pc, current_function_end);
+
+    if (it == loader::debugSymbolTable.end()) {
+        return csprintf("%#x", pc);
+    }
+
+    return it->name();
+}
+
+std::string
+makeCallRetJson(char phase, const std::string &name, Tick time_us)
+{
+    std::ostringstream json;
+    json << "{\"ph\":\"" << phase
+         << "\",\"name\":\"" << name
+         << "\",\"ts\":" << time_us
+         << ",\"tid\": 0,\"pid\": 0}";
+    return json.str();
+}
+
+} // namespace
 
 // This variable reflects the max number of threads in any CPU.  Be
 // careful to only use it once all the CPUs that you care about have
@@ -159,6 +249,16 @@ BaseCPU::BaseCPU(const Params &p, bool is_checker)
         maxThreadsPerCPU = numThreads;
 
     functionTracingEnabled = false;
+    callStackTracingEnabled = false;
+
+    if (p.call_stack_tracing) {
+        if (!callRetTraceRegistered) {
+            registerExitCallback(writeCallRetTrace);
+            callRetTraceRegistered = true;
+        }
+        callStackTracingEnabled = true;
+    }
+
     if (p.function_trace) {
         const std::string fname = csprintf("ftrace.%s", name());
         functionTraceStream = simout.findOrCreate(fname)->stream();
@@ -835,6 +935,49 @@ BaseCPU::traceFunctionsInternal(Addr pc)
                  curTick() - functionEntryTick, curTick(), sym_str);
         functionEntryTick = curTick();
     }
+}
+
+void
+BaseCPU::traceCallReturnInternal(
+    Addr current_pc, Addr call_target_pc, bool is_call, bool is_return,
+    bool is_uncond_ctrl)
+{
+    if (loader::debugSymbolTable.empty()) {
+        return;
+    }
+
+    const Tick time_cycle = curCycle();
+
+    if (is_call) {
+        const std::string callee_name =
+            escapeJsonString(functionSymbolForTrace(call_target_pc));
+        callRetTraceEvents.emplace_back(
+            makeCallRetJson('B', callee_name, time_cycle));
+        return;
+    }
+
+    if (is_return) {
+        const std::string callee_name =
+            escapeJsonString(functionSymbolForTrace(current_pc));
+        callRetTraceEvents.emplace_back(
+            makeCallRetJson('E', callee_name, time_cycle));
+        return;
+    }
+
+    if (!is_uncond_ctrl) {
+        return;
+    }
+
+    const std::string current_name = functionSymbolForTrace(current_pc);
+    const std::string target_name = functionSymbolForTrace(call_target_pc);
+    if (current_name == target_name) {
+        return;
+    }
+
+    callRetTraceEvents.emplace_back(
+        makeCallRetJson('E', escapeJsonString(current_name), time_cycle));
+    callRetTraceEvents.emplace_back(
+        makeCallRetJson('B', escapeJsonString(target_name), time_cycle));
 }
 
 void

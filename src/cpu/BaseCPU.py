@@ -113,6 +113,7 @@ class BaseCPU(ClockedObject):
     )
 
     function_trace = Param.Bool(False, "Enable function trace")
+    call_stack_tracing = Param.Bool(False, "Enable call/return stack trace")
     function_trace_start = Param.Tick(0, "Tick to start function trace")
 
     checker = Param.BaseCPU(NULL, "checker CPU")
