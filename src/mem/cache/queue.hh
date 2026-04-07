@@ -147,6 +147,12 @@ class Queue : public Drainable, public Named
         return allocated == 0;
     }
 
+    const typename Entry::List &
+    getAllocated() const
+    {
+        return allocatedList;
+    }
+
     bool isFull() const
     {
         return (allocated >= numEntries - numReserve);

@@ -33,6 +33,8 @@
 
 #include "mem/cache/prefetch/sms.hh"
 
+#include <algorithm>
+
 #include "debug/HWPrefetch.hh"
 #include "params/SmsPrefetcher.hh"
 
@@ -43,8 +45,11 @@ namespace prefetch
 {
 
 Sms::Sms(const SmsPrefetcherParams &p)
-    : Queued(p), Max_Contexts(p.ft_size), MAX_PHTSize(p.pht_size),
-      Region_Size(p.region_size)
+    : Queued(p),
+      Max_Contexts(p.ft_size),
+      MAX_PHTSize(p.pht_size),
+      Region_Size(p.region_size),
+      runtimeDegree(1)
 {
     AGT.clear();
     AGTPC.clear();
@@ -53,7 +58,20 @@ Sms::Sms(const SmsPrefetcherParams &p)
     fifoFT.clear();
     lruAGT.clear();
     lruPHT.clear();
+    runtimeDegree = getIpopMaxAggressivenessLevel();
+}
 
+void
+Sms::setIpopAggressivenessLevel(unsigned int level)
+{
+    Queued::setIpopAggressivenessLevel(level);
+    runtimeDegree = level;
+}
+
+unsigned int
+Sms::getIpopMaxAggressivenessLevel() const
+{
+    return std::max<unsigned int>(1, Region_Size / blkSize);
 }
 void
 Sms::notifyEvict(const EvictionInfo &info)
@@ -140,10 +158,15 @@ Sms::calculatePrefetch(const PrefetchInfo &pfi,
     //Prediction
     std::pair <Addr, Addr> pc_offset = std::make_pair(pc,offset);
     if (PHT.find(pc_offset) != PHT.end()) {
+        unsigned int issued = 0;
         for (std::set<Addr>::iterator it = PHT[pc_offset].begin();
          it != PHT[pc_offset].end(); it ++) {
+            if (issued == runtimeDegree) {
+                break;
+            }
             Addr pref_addr = blockAddress(region_base + (*it));
             addresses.push_back(AddrPriority(pref_addr,0));
+            issued++;
         }
         for (std::deque < std::pair <Addr,Addr> >::iterator lit
          = lruPHT.begin(); lit != lruPHT.end(); lit ++) {

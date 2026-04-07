@@ -59,6 +59,7 @@
 #include "mem/cache/cache_blk.hh"
 #include "mem/cache/compressors/base.hh"
 #include "mem/cache/mshr.hh"
+#include "mem/cache/prefetch/ipop_info.hh"
 #include "mem/cache/tags/base.hh"
 #include "mem/cache/write_queue_entry.hh"
 #include "mem/request.hh"
@@ -732,180 +733,193 @@ Cache::serviceMSHRTargets(MSHR *mshr, const PacketPtr pkt, CacheBlk *blk)
     for (auto &target: targets) {
         Packet *tgt_pkt = target.pkt;
         switch (target.source) {
-          case MSHR::Target::FromCPU:
-            from_core = true;
+            case MSHR::Target::FromCPU: {
+                from_core = true;
 
-            Tick completion_time;
-            // Here we charge on completion_time the delay of the xbar if the
-            // packet comes from it, charged on headerDelay.
-            completion_time = pkt->headerDelay;
+                Tick completion_time;
+                // Here we charge on completion_time the delay of the xbar if
+                // the packet comes from it, charged on headerDelay.
+                completion_time = pkt->headerDelay;
 
-            // Software prefetch handling for cache closest to core
-            if (tgt_pkt->cmd.isSWPrefetch()) {
-                if (tgt_pkt->needsWritable()) {
-                    // All other copies of the block were invalidated and we
-                    // have an exclusive copy.
+                // Software prefetch handling for cache closest to core
+                if (tgt_pkt->cmd.isSWPrefetch()) {
+                    if (tgt_pkt->needsWritable()) {
+                        // All other copies of the block were invalidated and
+                        // we have an exclusive copy.
 
-                    // The coherence protocol assumes that if we fetched an
-                    // exclusive copy of the block, we have the intention to
-                    // modify it. Therefore the MSHR for the PrefetchExReq has
-                    // been the point of ordering and this cache has commited
-                    // to respond to snoops for the block.
-                    //
-                    // In most cases this is true anyway - a PrefetchExReq
-                    // will be followed by a WriteReq. However, if that
-                    // doesn't happen, the block is not marked as dirty and
-                    // the cache doesn't respond to snoops that has committed
-                    // to do so.
-                    //
-                    // To avoid deadlocks in cases where there is a snoop
-                    // between the PrefetchExReq and the expected WriteReq, we
-                    // proactively mark the block as Dirty.
-                    assert(blk);
-                    blk->setCoherenceBits(CacheBlk::DirtyBit);
+                        // The coherence protocol assumes that if we fetched an
+                        // exclusive copy of the block, we have the intention
+                        // to modify it. Therefore the MSHR for the
+                        // PrefetchExReq has been the point of ordering and
+                        // this cache has commited to respond to snoops for the
+                        // block.
+                        //
+                        // In most cases this is true anyway - a PrefetchExReq
+                        // will be followed by a WriteReq. However, if that
+                        // doesn't happen, the block is not marked as dirty and
+                        // the cache doesn't respond to snoops that has
+                        // committed to do so.
+                        //
+                        // To avoid deadlocks in cases where there is a snoop
+                        // between the PrefetchExReq and the expected WriteReq,
+                        // we proactively mark the block as Dirty.
+                        assert(blk);
+                        blk->setCoherenceBits(CacheBlk::DirtyBit);
 
-                    panic_if(isReadOnly, "Prefetch exclusive requests from "
-                            "read-only cache %s\n", name());
-                }
-
-                // a software prefetch would have already been ack'd
-                // immediately with dummy data so the core would be able to
-                // retire it. This request completes right here, so we
-                // deallocate it.
-                delete tgt_pkt;
-                break; // skip response
-            }
-
-            // unlike the other packet flows, where data is found in other
-            // caches or memory and brought back, write-line requests always
-            // have the data right away, so the above check for "is fill?"
-            // cannot actually be determined until examining the stored MSHR
-            // state. We "catch up" with that logic here, which is duplicated
-            // from above.
-            if (tgt_pkt->cmd == MemCmd::WriteLineReq) {
-                assert(!is_error);
-                assert(blk);
-                assert(blk->isSet(CacheBlk::WritableBit));
-            }
-
-            // Here we decide whether we will satisfy the target using
-            // data from the block or from the response. We use the
-            // block data to satisfy the request when the block is
-            // present and valid and in addition the response in not
-            // forwarding data to the cache above (we didn't fill
-            // either); otherwise we use the packet data.
-            if (blk && blk->isValid() &&
-                (!mshr->isForward || !pkt->hasData())) {
-                satisfyRequest(tgt_pkt, blk, true, mshr->hasPostDowngrade());
-
-                // How many bytes past the first request is this one
-                int transfer_offset =
-                    tgt_pkt->getOffset(blkSize) - initial_offset;
-                if (transfer_offset < 0) {
-                    transfer_offset += blkSize;
-                }
-
-                // If not critical word (offset) return payloadDelay.
-                // responseLatency is the latency of the return path
-                // from lower level caches/memory to an upper level cache or
-                // the core.
-                completion_time += clockEdge(responseLatency) +
-                    (transfer_offset ? pkt->payloadDelay : 0);
-
-                assert(!tgt_pkt->req->isUncacheable());
-
-                assert(tgt_pkt->req->requestorId() < system->maxRequestors());
-                stats.cmdStats(tgt_pkt)
-                    .missLatency[tgt_pkt->req->requestorId()] +=
-                    completion_time - target.recvTime;
-
-                if (tgt_pkt->cmd == MemCmd::LockedRMWReadReq) {
-                    // We're going to leave a target in the MSHR until the
-                    // write half of the RMW occurs (see comments above in
-                    // recvTimingReq()).  Since we'll be using the current
-                    // request packet (which has the allocated data pointer)
-                    // to form the response, we have to allocate a new dummy
-                    // packet to save in the MSHR target.
-                    mshr->updateLockedRMWReadTarget(tgt_pkt);
-                    // skip the rest of target processing after we
-                    // send the response
-                    // Mark block inaccessible until write arrives
-                    blk->clearCoherenceBits(CacheBlk::WritableBit);
-                    blk->clearCoherenceBits(CacheBlk::ReadableBit);
-                }
-            } else if (pkt->cmd == MemCmd::UpgradeFailResp) {
-                // failed StoreCond upgrade
-                assert(tgt_pkt->cmd == MemCmd::StoreCondReq ||
-                       tgt_pkt->cmd == MemCmd::StoreCondFailReq ||
-                       tgt_pkt->cmd == MemCmd::SCUpgradeFailReq);
-                // responseLatency is the latency of the return path
-                // from lower level caches/memory to an upper level cache or
-                // the core.
-                completion_time += clockEdge(responseLatency) +
-                    pkt->payloadDelay;
-                tgt_pkt->req->setExtraData(0);
-            } else if (pkt->cmd == MemCmd::LockedRMWWriteResp) {
-                // Fake response on LockedRMW completion, see above.
-                // Since the data is already in the cache, we just use
-                // responseLatency with no extra penalties.
-                completion_time = clockEdge(responseLatency);
-            } else {
-                if (is_invalidate && blk && blk->isValid()) {
-                    // We are about to send a response to a cache above
-                    // that asked for an invalidation; we need to
-                    // invalidate our copy immediately as the most
-                    // up-to-date copy of the block will now be in the
-                    // cache above. It will also prevent this cache from
-                    // responding (if the block was previously dirty) to
-                    // snoops as they should snoop the caches above where
-                    // they will get the response from.
-                    invalidateBlock(blk);
-                }
-                // not a cache fill, just forwarding response
-                // responseLatency is the latency of the return path
-                // from lower level caches/memory to the core.
-                completion_time += clockEdge(responseLatency) +
-                    pkt->payloadDelay;
-                if (!is_error) {
-                    if (pkt->isRead()) {
-                        // sanity check
-                        assert(pkt->matchAddr(tgt_pkt));
-                        assert(pkt->getSize() >= tgt_pkt->getSize());
-
-                        tgt_pkt->setData(pkt->getConstPtr<uint8_t>());
-                    } else {
-                        // MSHR targets can read data either from the
-                        // block or the response pkt. If we can't get data
-                        // from the block (i.e., invalid or has old data)
-                        // or the response (did not bring in any data)
-                        // then make sure that the target didn't expect
-                        // any.
-                        assert(!tgt_pkt->hasRespData());
+                        panic_if(isReadOnly,
+                                 "Prefetch exclusive requests from "
+                                 "read-only cache %s\n",
+                                 name());
                     }
+
+                    // a software prefetch would have already been ack'd
+                    // immediately with dummy data so the core would be able to
+                    // retire it. This request completes right here, so we
+                    // deallocate it.
+                    delete tgt_pkt;
+                    break; // skip response
                 }
 
-                // this response did not allocate here and therefore
-                // it was not consumed, make sure that any flags are
-                // carried over to cache above
-                tgt_pkt->copyResponderFlags(pkt);
+                // unlike the other packet flows, where data is found in other
+                // caches or memory and brought back, write-line requests
+                // always have the data right away, so the above check for "is
+                // fill?" cannot actually be determined until examining the
+                // stored MSHR state. We "catch up" with that logic here, which
+                // is duplicated from above.
+                if (tgt_pkt->cmd == MemCmd::WriteLineReq) {
+                    assert(!is_error);
+                    assert(blk);
+                    assert(blk->isSet(CacheBlk::WritableBit));
+                }
+
+                // Here we decide whether we will satisfy the target using
+                // data from the block or from the response. We use the
+                // block data to satisfy the request when the block is
+                // present and valid and in addition the response in not
+                // forwarding data to the cache above (we didn't fill
+                // either); otherwise we use the packet data.
+                if (blk && blk->isValid() &&
+                    (!mshr->isForward || !pkt->hasData())) {
+                    satisfyRequest(tgt_pkt, blk, true,
+                                   mshr->hasPostDowngrade());
+
+                    // How many bytes past the first request is this one
+                    int transfer_offset =
+                        tgt_pkt->getOffset(blkSize) - initial_offset;
+                    if (transfer_offset < 0) {
+                        transfer_offset += blkSize;
+                    }
+
+                    // If not critical word (offset) return payloadDelay.
+                    // responseLatency is the latency of the return path
+                    // from lower level caches/memory to an upper level cache
+                    // or the core.
+                    completion_time +=
+                        clockEdge(responseLatency) +
+                        (transfer_offset ? pkt->payloadDelay : 0);
+
+                    assert(!tgt_pkt->req->isUncacheable());
+
+                    assert(tgt_pkt->req->requestorId() <
+                           system->maxRequestors());
+                    stats.cmdStats(tgt_pkt)
+                        .missLatency[tgt_pkt->req->requestorId()] +=
+                        completion_time - target.recvTime;
+
+                    if (tgt_pkt->cmd == MemCmd::LockedRMWReadReq) {
+                        // We're going to leave a target in the MSHR until the
+                        // write half of the RMW occurs (see comments above in
+                        // recvTimingReq()).  Since we'll be using the current
+                        // request packet (which has the allocated data
+                        // pointer) to form the response, we have to allocate a
+                        // new dummy packet to save in the MSHR target.
+                        mshr->updateLockedRMWReadTarget(tgt_pkt);
+                        // skip the rest of target processing after we
+                        // send the response
+                        // Mark block inaccessible until write arrives
+                        blk->clearCoherenceBits(CacheBlk::WritableBit);
+                        blk->clearCoherenceBits(CacheBlk::ReadableBit);
+                    }
+                } else if (pkt->cmd == MemCmd::UpgradeFailResp) {
+                    // failed StoreCond upgrade
+                    assert(tgt_pkt->cmd == MemCmd::StoreCondReq ||
+                           tgt_pkt->cmd == MemCmd::StoreCondFailReq ||
+                           tgt_pkt->cmd == MemCmd::SCUpgradeFailReq);
+                    // responseLatency is the latency of the return path
+                    // from lower level caches/memory to an upper level cache
+                    // or the core.
+                    completion_time +=
+                        clockEdge(responseLatency) + pkt->payloadDelay;
+                    tgt_pkt->req->setExtraData(0);
+                } else if (pkt->cmd == MemCmd::LockedRMWWriteResp) {
+                    // Fake response on LockedRMW completion, see above.
+                    // Since the data is already in the cache, we just use
+                    // responseLatency with no extra penalties.
+                    completion_time = clockEdge(responseLatency);
+                } else {
+                    if (is_invalidate && blk && blk->isValid()) {
+                        // We are about to send a response to a cache above
+                        // that asked for an invalidation; we need to
+                        // invalidate our copy immediately as the most
+                        // up-to-date copy of the block will now be in the
+                        // cache above. It will also prevent this cache from
+                        // responding (if the block was previously dirty) to
+                        // snoops as they should snoop the caches above where
+                        // they will get the response from.
+                        invalidateBlock(blk);
+                    }
+                    // not a cache fill, just forwarding response
+                    // responseLatency is the latency of the return path
+                    // from lower level caches/memory to the core.
+                    completion_time +=
+                        clockEdge(responseLatency) + pkt->payloadDelay;
+                    if (!is_error) {
+                        if (pkt->isRead()) {
+                            // sanity check
+                            assert(pkt->matchAddr(tgt_pkt));
+                            assert(pkt->getSize() >= tgt_pkt->getSize());
+
+                            tgt_pkt->setData(pkt->getConstPtr<uint8_t>());
+                        } else {
+                            // MSHR targets can read data either from the
+                            // block or the response pkt. If we can't get data
+                            // from the block (i.e., invalid or has old data)
+                            // or the response (did not bring in any data)
+                            // then make sure that the target didn't expect
+                            // any.
+                            assert(!tgt_pkt->hasRespData());
+                        }
+                    }
+
+                    // this response did not allocate here and therefore
+                    // it was not consumed, make sure that any flags are
+                    // carried over to cache above
+                    tgt_pkt->copyResponderFlags(pkt);
+                }
+                const bool respond_to_cache = tgt_pkt->fromCache();
+                tgt_pkt->makeTimingResponse();
+                if (respond_to_cache) {
+                    tgt_pkt->pushSenderState(new prefetch::IPOPResponseState(
+                        mshr->getIpopAccessDram()));
+                }
+                // if this packet is an error copy that to the new packet
+                if (is_error) {
+                    tgt_pkt->copyError(pkt);
+                }
+                if (tgt_pkt->cmd == MemCmd::ReadResp &&
+                    (is_invalidate || mshr->hasPostInvalidate())) {
+                    // If intermediate cache got ReadRespWithInvalidate,
+                    // propagate that.  Response should not have
+                    // isInvalidate() set otherwise.
+                    tgt_pkt->cmd = MemCmd::ReadRespWithInvalidate;
+                    DPRINTF(Cache, "%s: updated cmd to %s\n", __func__,
+                            tgt_pkt->print());
+                }
+                // Reset the bus additional time as it is now accounted for
+                tgt_pkt->headerDelay = tgt_pkt->payloadDelay = 0;
+                cpuSidePort.schedTimingResp(tgt_pkt, completion_time);
+                break;
             }
-            tgt_pkt->makeTimingResponse();
-            // if this packet is an error copy that to the new packet
-            if (is_error)
-                tgt_pkt->copyError(pkt);
-            if (tgt_pkt->cmd == MemCmd::ReadResp &&
-                (is_invalidate || mshr->hasPostInvalidate())) {
-                // If intermediate cache got ReadRespWithInvalidate,
-                // propagate that.  Response should not have
-                // isInvalidate() set otherwise.
-                tgt_pkt->cmd = MemCmd::ReadRespWithInvalidate;
-                DPRINTF(Cache, "%s: updated cmd to %s\n", __func__,
-                        tgt_pkt->print());
-            }
-            // Reset the bus additional time as it is now accounted for
-            tgt_pkt->headerDelay = tgt_pkt->payloadDelay = 0;
-            cpuSidePort.schedTimingResp(tgt_pkt, completion_time);
-            break;
 
           case MSHR::Target::FromPrefetcher:
             assert(tgt_pkt->cmd == MemCmd::HardPFReq);

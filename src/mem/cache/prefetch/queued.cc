@@ -98,13 +98,19 @@ Queued::DeferredPacket::finish(const Fault &fault,
 }
 
 Queued::Queued(const QueuedPrefetcherParams &p)
-    : Base(p), queueSize(p.queue_size),
+    : Base(p),
+      queueSize(p.queue_size),
       missingTranslationQueueSize(
-        p.max_prefetch_requests_with_pending_translation),
-      latency(p.latency), queueSquash(p.queue_squash),
-      queueFilter(p.queue_filter), cacheSnoop(p.cache_snoop),
+          p.max_prefetch_requests_with_pending_translation),
+      latency(p.latency),
+      queueSquash(p.queue_squash),
+      queueFilter(p.queue_filter),
+      cacheSnoop(p.cache_snoop),
       tagPrefetch(p.tag_prefetch),
-      throttleControlPct(p.throttle_control_percentage), statsQueued(this)
+      throttleControlPct(p.throttle_control_percentage),
+      ipopEnabled(true),
+      ipopAggressivenessLevel(1),
+      statsQueued(this)
 {
 }
 
@@ -169,8 +175,30 @@ Queued::getMaxPermittedPrefetches(size_t total) const
 }
 
 void
+Queued::setIpopEnabled(bool enabled)
+{
+    ipopEnabled = enabled;
+}
+
+void
+Queued::setIpopAggressivenessLevel(unsigned int level)
+{
+    if (level == 0 || level > getIpopMaxAggressivenessLevel()) {
+        fatal("%s: I-POP aggressiveness level %u is outside [1, %u]", name(),
+              level, getIpopMaxAggressivenessLevel());
+    }
+    ipopAggressivenessLevel = level;
+}
+
+void
 Queued::notify(const CacheAccessProbeArg &acc, const PrefetchInfo &pfi)
 {
+    if (!ipopEnabled) {
+        DPRINTF(HWPrefetch, "I-POP disabled candidate generation for %s.\n",
+                name());
+        return;
+    }
+
     Addr blk_addr = blockAddress(pfi.getAddr());
     bool is_secure = pfi.isSecure();
     const PacketPtr pkt = acc.pkt;
@@ -199,7 +227,7 @@ Queued::notify(const CacheAccessProbeArg &acc, const PrefetchInfo &pfi)
     std::vector<AddrPriority> addresses;
     calculatePrefetch(pfi, addresses, cache);
 
-    // Get the maximu number of prefetches that we are allowed to generate
+    // Child prefetchers interpret I-POP aggressiveness themselves.
     size_t max_pfs = getMaxPermittedPrefetches(addresses.size());
 
     // Queue up generated prefetches

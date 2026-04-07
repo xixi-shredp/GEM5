@@ -54,16 +54,28 @@
 #include "base/types.hh"
 #include "debug/MSHR.hh"
 #include "mem/cache/base.hh"
+#include "mem/cache/prefetch/ipop_info.hh"
 #include "mem/request.hh"
 
 namespace gem5
 {
 
 MSHR::MSHR(const std::string &name)
-    : QueueEntry(name), Printable(), downstreamPending(false),
-      pendingModified(false), postInvalidate(false), postDowngrade(false),
-      wasWholeLineWrite(false), isForward(false), readyIter(), allocIter(),
-      targets(name + ".targets"), deferredTargets(name + ".deferredTargets")
+    : QueueEntry(name),
+      Printable(),
+      downstreamPending(false),
+      pendingModified(false),
+      postInvalidate(false),
+      postDowngrade(false),
+      wasWholeLineWrite(false),
+      isForward(false),
+      ipopTimestamp(0),
+      ipopPrefetcherIdBits(0),
+      ipopAccessDram(false),
+      readyIter(),
+      allocIter(),
+      targets(name + ".targets"),
+      deferredTargets(name + ".deferredTargets")
 {
 }
 
@@ -311,6 +323,9 @@ MSHR::allocate(Addr blk_addr, unsigned blk_size, PacketPtr target,
     _isUncacheable = target->req->isUncacheable();
     inService = false;
     downstreamPending = false;
+    ipopTimestamp = curTick();
+    ipopPrefetcherIdBits = 0;
+    ipopAccessDram = false;
 
     targets.init(blkAddr, blkSize);
     deferredTargets.init(blkAddr, blkSize);
@@ -319,6 +334,22 @@ MSHR::allocate(Addr blk_addr, unsigned blk_size, PacketPtr target,
     // snoop (mem-side request), so set source according to request here
     Target::Source source = (target->cmd == MemCmd::HardPFReq) ?
         Target::FromPrefetcher : Target::FromCPU;
+    if (source == Target::FromPrefetcher) {
+        if (auto *ipop_state = dynamic_cast<prefetch::IPOPRequestState *>(
+                target->senderState)) {
+            target->popSenderState();
+            ipopPrefetcherIdBits = ipop_state->prefetcherIdBits;
+            delete ipop_state;
+        } else {
+            /*
+             * Non-I-POP prefetchers still allocate HardPFReq packets.
+             * Keep a distinct non-zero marker so prefetches remain
+             * distinguishable from demand misses until they are managed
+             * by IPOPMulti.
+             */
+            ipopPrefetcherIdBits = 1;
+        }
+    }
     targets.add(target, when_ready, _order, source, true, alloc_on_fill);
 
     // All targets must refer to the same block
