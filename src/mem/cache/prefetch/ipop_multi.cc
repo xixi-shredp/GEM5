@@ -29,9 +29,11 @@
 #include "mem/cache/prefetch/ipop_multi.hh"
 
 #include <algorithm>
+#include <fstream>
 #include <limits>
 
 #include "base/logging.hh"
+#include "cpu/base.hh"
 #include "mem/cache/prefetch/queued.hh"
 #include "params/IPOPMultiPrefetcher.hh"
 
@@ -119,6 +121,8 @@ IPOPMulti::IPOPMulti(const IPOPMultiPrefetcherParams &p)
       channelBits(p.channel_bits),
       bankShift(p.bank_shift),
       bankBits(p.bank_bits),
+      recordPhasePeIpcCsv(p.record_phase_pe_ipc_csv),
+      phasePeIpcCsvPath(p.phase_pe_ipc_csv_path),
       pfht(pfhtEntries),
       poht(pohtEntries),
       phaseCounters(prefetchers.size()),
@@ -130,7 +134,9 @@ IPOPMulti::IPOPMulti(const IPOPMultiPrefetcherParams &p)
       llcMissLatencySum(0),
       dramMissLatencySum(0),
       llcMissLatencySamples(0),
-      dramMissLatencySamples(0)
+      dramMissLatencySamples(0),
+      lastPhaseInsts(0),
+      lastPhaseCycles(0)
 {
     fatal_if(prefetchers.size() > sizeof(uint64_t) * 8,
              "%s supports at most %u child prefetchers for one-hot I-POP IDs",
@@ -151,6 +157,10 @@ IPOPMulti::IPOPMulti(const IPOPMultiPrefetcherParams &p)
              "%s channel decode exceeds 64 address bits", name());
     fatal_if(bankBits != 0 && bankShift + bankBits > 64,
              "%s bank decode exceeds 64 address bits", name());
+    fatal_if(recordPhasePeIpcCsv && phasePeIpcCsvPath.empty(),
+             "%s requires phase_pe_ipc_csv_path when "
+             "record_phase_pe_ipc_csv is enabled",
+             name());
 
     ipopStats.pe.init(prefetchers.size());
     ipopStats.currentLevel.init(prefetchers.size());
@@ -224,6 +234,10 @@ IPOPMulti::IPOPMulti(const IPOPMultiPrefetcherParams &p)
         ipopStats.totalDelay.subname(i, state.name);
         ipopStats.totalBus.subname(i, state.name);
         ipopStats.totalBank.subname(i, state.name);
+    }
+
+    if (recordPhasePeIpcCsv) {
+        initializeCsvLogging();
     }
 }
 
@@ -396,6 +410,71 @@ IPOPMulti::controlStateName(ControlState state) const
     panic("%s reached invalid I-POP control state", name());
 }
 
+Counter
+IPOPMulti::totalCpuCycles() const
+{
+    Counter total = 0;
+    for (auto *cpu : BaseCPU::getCpuList()) {
+        total += cpu->baseStats.numCycles.value();
+    }
+
+    return total;
+}
+
+double
+IPOPMulti::currentPhaseIpc(Counter insts, Counter cycles) const
+{
+    const Counter delta_insts = insts - lastPhaseInsts;
+    const Counter delta_cycles = cycles - lastPhaseCycles;
+    if (delta_cycles == 0) {
+        return 0.0;
+    }
+
+    return static_cast<double>(delta_insts) /
+           static_cast<double>(delta_cycles);
+}
+
+void
+IPOPMulti::initializeCsvLogging()
+{
+    std::ifstream input(phasePeIpcCsvPath);
+    const bool needs_header =
+        !input.good() || input.peek() == std::ifstream::traits_type::eof();
+    input.close();
+
+    std::ofstream output(phasePeIpcCsvPath, std::ios::app);
+    fatal_if(!output.is_open(), "%s could not open CSV output path %s", name(),
+             phasePeIpcCsvPath);
+
+    if (!needs_header) {
+        return;
+    }
+
+    output << "phase_index,next_phase_ipc";
+    for (const auto &state : runtimeStates) {
+        output << "," << state.name << "_pe";
+    }
+    output << "\n";
+}
+
+void
+IPOPMulti::appendPendingPhaseCsvRecord(double next_phase_ipc)
+{
+    if (!recordPhasePeIpcCsv || !pendingPhaseCsvRecord.valid) {
+        return;
+    }
+
+    std::ofstream output(phasePeIpcCsvPath, std::ios::app);
+    fatal_if(!output.is_open(), "%s could not append CSV output path %s",
+             name(), phasePeIpcCsvPath);
+
+    output << pendingPhaseCsvRecord.phaseIndex << "," << next_phase_ipc;
+    for (double pe : pendingPhaseCsvRecord.peValues) {
+        output << "," << pe;
+    }
+    output << "\n";
+}
+
 void
 IPOPMulti::updateExportedStats(double llc_latency, double dram_latency)
 {
@@ -494,6 +573,9 @@ IPOPMulti::evaluatePhase()
 {
     const double llc_latency = averageMissLatencyCycles(false);
     const double dram_latency = averageMissLatencyCycles(true);
+    const Counter total_insts = BaseCPU::totalNumSimulatedInsts();
+    const Counter total_cycles = totalCpuCycles();
+    const double phase_ipc = currentPhaseIpc(total_insts, total_cycles);
 
     for (unsigned int i = 0; i < phaseCounters.size(); ++i) {
         runtimeStates[i].lastPe =
@@ -584,6 +666,19 @@ IPOPMulti::evaluatePhase()
         applyRuntimeState(i);
     }
 
+    if (recordPhasePeIpcCsv) {
+        appendPendingPhaseCsvRecord(phase_ipc);
+        pendingPhaseCsvRecord.valid = true;
+        pendingPhaseCsvRecord.phaseIndex = completedPhases;
+        pendingPhaseCsvRecord.peValues.clear();
+        pendingPhaseCsvRecord.peValues.reserve(runtimeStates.size());
+        for (const auto &state : runtimeStates) {
+            pendingPhaseCsvRecord.peValues.push_back(state.lastPe);
+        }
+    }
+
+    lastPhaseInsts = total_insts;
+    lastPhaseCycles = total_cycles;
     updateExportedStats(llc_latency, dram_latency);
     completedPhases++;
     resetPhaseStats();

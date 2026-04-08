@@ -30,9 +30,11 @@
 #define __MEM_CACHE_PREFETCH_IPOP_MULTI_HH__
 
 #include <cstdint>
+#include <fstream>
 #include <string>
 #include <vector>
 
+#include "base/types.hh"
 #include "mem/cache/prefetch/ipop_info.hh"
 #include "mem/cache/prefetch/multi.hh"
 
@@ -126,6 +128,13 @@ class IPOPMulti : public Multi
         statistics::Vector totalBank;
     };
 
+    struct PendingPhaseCsvRecord
+    {
+        bool valid = false;
+        uint64_t phaseIndex = 0;
+        std::vector<double> peValues;
+    };
+
   public:
     explicit IPOPMulti(const IPOPMultiPrefetcherParams &p);
 
@@ -152,6 +161,8 @@ class IPOPMulti : public Multi
     const unsigned int channelBits;
     const unsigned int bankShift;
     const unsigned int bankBits;
+    const bool recordPhasePeIpcCsv;
+    const std::string phasePeIpcCsvPath;
 
     std::vector<TableEntry> pfht;
     std::vector<TableEntry> poht;
@@ -166,6 +177,9 @@ class IPOPMulti : public Multi
     Tick dramMissLatencySum;
     uint64_t llcMissLatencySamples;
     uint64_t dramMissLatencySamples;
+    Counter lastPhaseInsts;
+    Counter lastPhaseCycles;
+    PendingPhaseCsvRecord pendingPhaseCsvRecord;
 
     uint64_t getPrefetcherIdBits(uint8_t prefetcher_index) const;
     Addr tableIndex(Addr addr, unsigned int entries) const;
@@ -191,6 +205,10 @@ class IPOPMulti : public Multi
     bool sameBank(Addr lhs, Addr rhs) const;
     double controlStateValue(ControlState state) const;
     const char *controlStateName(ControlState state) const;
+    Counter totalCpuCycles() const;
+    double currentPhaseIpc(Counter insts, Counter cycles) const;
+    void initializeCsvLogging();
+    void appendPendingPhaseCsvRecord(double next_phase_ipc);
     void updateExportedStats(double llc_latency, double dram_latency);
 };
 

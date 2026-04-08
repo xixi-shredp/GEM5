@@ -134,6 +134,14 @@ class IPOPMultiPrefetcher(MultiPrefetcher):
     type = "IPOPMultiPrefetcher"
     cxx_class = "gem5::prefetch::IPOPMulti"
     cxx_header = "mem/cache/prefetch/ipop_multi.hh"
+    record_phase_pe_ipc_csv = Param.Bool(
+        False,
+        "Record each phase's PE values together with the next phase's IPC",
+    )
+    phase_pe_ipc_csv_path = Param.String(
+        "",
+        "CSV output path for phase PE and next-phase IPC logging",
+    )
     phase_length = Param.Unsigned(1024, "Demand accesses per I-POP phase")
     pfht_entries = Param.Unsigned(512, "Number of PfHT entries")
     poht_entries = Param.Unsigned(512, "Number of PoHT entries")
