@@ -130,6 +130,16 @@ class MultiPrefetcher(BasePrefetcher):
     prefetchers = VectorParam.BasePrefetcher([], "Array of prefetchers")
 
 
+class MergedMultiPrefetcher(MultiPrefetcher):
+    type = "MergedMultiPrefetcher"
+    cxx_class = "gem5::prefetch::MergedMulti"
+    cxx_header = "mem/cache/prefetch/merged_multi.hh"
+
+    queue_size = Param.Unsigned(
+        32, "Maximum number of merged queued prefetches"
+    )
+
+
 class QueuedPrefetcher(BasePrefetcher):
     type = "QueuedPrefetcher"
     abstract = True
