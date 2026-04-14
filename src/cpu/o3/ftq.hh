@@ -46,6 +46,7 @@
 #include "base/statistics.hh"
 #include "base/types.hh"
 #include "cpu/inst_seq.hh"
+#include "cpu/o3/fetch_target_pred_state.hh"
 #include "cpu/o3/limits.hh"
 #include "cpu/pred/bpred_unit.hh"
 #include "sim/probe/probe.hh"
@@ -107,6 +108,9 @@ class FetchTarget
 
     /** If the exit branch is predicted taken */
     bool taken;
+
+    /** Current effective prediction metadata carried by this FT entry. */
+    FetchTargetPredictionState predictionState;
 
   public:
     /** Anchor point to attach a branch predictor history.
@@ -210,9 +214,29 @@ class FetchTarget
         return taken;
     }
 
+    /** Returns the predictor stage that produced the effective result. */
+    size_t
+    predictionStage() const
+    {
+        return predictionState.stage();
+    }
+
+    /** Returns whether a later predictor stage revised this FT entry. */
+    bool
+    predictionCorrected() const
+    {
+        return predictionState.corrected();
+    }
+
     /** Complete a fetch target with the exit instruction */
     void finalize(const PCStateBase &exit_pc, bool _is_branch, bool pred_taken,
-                  const PCStateBase &pred_pc);
+                  const PCStateBase &pred_pc, size_t predictor_stage = 0);
+
+    /** Revise the effective prediction after a later pipeline stage completes.
+     *  This updates the currently visible prediction metadata carried by the
+     *  FT entry. */
+    void revisePrediction(bool pred_taken, const PCStateBase &pred_pc,
+                          size_t predictor_stage);
 
     /** Print the fetch target for debugging. */
     std::string toString();
@@ -308,6 +332,14 @@ class FTQ
      *  @param fetchTarget Pointer to the fetch target to be inserted.
      */
     void insert(ThreadID tid, FetchTargetPtr fetchTarget);
+
+    /** Find a fetch target by sequence number. Returns nullptr if absent. */
+    FetchTargetPtr find(ThreadID tid, FTSeqNum ft_seq_num);
+
+    /** Revise an in-flight fetch target's effective prediction in place.
+     *  Returns false if the fetch target is no longer present. */
+    bool revisePrediction(ThreadID tid, FTSeqNum ft_seq_num, bool pred_taken,
+                          const PCStateBase &pred_pc, size_t predictor_stage);
 
     /** Squashes all fetch targets in the FTQ for a specific thread. */
     void squash(ThreadID tid);

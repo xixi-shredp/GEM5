@@ -335,6 +335,8 @@ BPredUnit::predict(const StaticInstPtr &inst, const InstSeqNum &seqNum,
 void
 BPredUnit::update(const InstSeqNum &done_sn, ThreadID tid)
 {
+    commitResolvedThrough(done_sn, tid);
+
     DPRINTF(Branch, "[tid:%i] Committing branches until "
             "[sn:%llu]\n", tid, done_sn);
 
@@ -379,6 +381,7 @@ BPredUnit::commitBranch(ThreadID tid, PredictorHistory* &hist)
     // Update the branch predictor with the correct results.
     cPred->update(tid, hist->pc, hist->actuallyTaken, hist->bpHistory, false,
                   hist->inst, hist->target->instAddr());
+    commitAdditionalHistories(tid, hist);
 
     // Commit also Indirect predictor and RAS
     if (iPred) {
@@ -402,6 +405,7 @@ BPredUnit::commitBranch(ThreadID tid, PredictorHistory* &hist)
 void
 BPredUnit::squash(const InstSeqNum &squashed_sn, ThreadID tid)
 {
+    squashResolvedYoungerThan(squashed_sn, tid);
 
     while (!predHist[tid].empty() &&
             predHist[tid].front()->seqNum > squashed_sn) {
@@ -451,6 +455,7 @@ BPredUnit::squashHistory(ThreadID tid, PredictorHistory* &history)
 
     // This call will  delete the bpHistory.
     cPred->squash(tid, history->bpHistory);
+    squashAdditionalHistories(tid, history);
 
     delete history;
     history = nullptr;
@@ -482,6 +487,7 @@ BPredUnit::squash(const InstSeqNum &squashed_sn,
     // Squash All Branches AFTER this mispredicted branch
     // First the Prefetch history then the main history.
     squash(squashed_sn, tid);
+    squashResolvedAt(squashed_sn, tid);
 
     // If there's a squash due to a syscall, there may not be an entry
     // corresponding to the squash.  In that case, don't bother trying to
@@ -525,7 +531,7 @@ BPredUnit::squash(const InstSeqNum &squashed_sn,
         // Correct Direction predictor ------------------
         cPred->update(tid, hist->pc, actually_taken, hist->bpHistory,
                       true, hist->inst, corr_target.instAddr());
-
+        recoverAdditionalHistories(tid, hist, actually_taken, corr_target);
 
         // Correct Indirect predictor -------------------
         if (iPred) {

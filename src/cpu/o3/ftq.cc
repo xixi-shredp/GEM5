@@ -64,12 +64,26 @@ FetchTarget::FetchTarget(const ThreadID _tid, const PCStateBase &_start_pc,
 
 void
 FetchTarget::finalize(const PCStateBase &exit_pc, bool _is_branch,
-                      bool pred_taken, const PCStateBase &pred_pc)
+                      bool pred_taken, const PCStateBase &pred_pc,
+                      size_t predictor_stage)
 {
     set(endPC, exit_pc);
     set(predPC, pred_pc);
     taken = pred_taken;
     is_branch = _is_branch;
+    predictionState.initialize(predictor_stage);
+}
+
+void
+FetchTarget::revisePrediction(bool pred_taken, const PCStateBase &pred_pc,
+                              size_t predictor_stage)
+{
+    const bool prediction_changed =
+        (taken != pred_taken) || (predPC != nullptr && *predPC != pred_pc);
+
+    set(predPC, pred_pc);
+    taken = pred_taken;
+    predictionState.revise(prediction_changed, predictor_stage);
 }
 
 std::string
@@ -193,6 +207,49 @@ FTQ::insert(ThreadID tid, FetchTargetPtr fetchTarget)
 
     DPRINTF(FTQ, "Insert %s in FTQ[T:%i]. size FTQ:%i\n",
             fetchTarget->toString(), tid, ftq[tid].size());
+}
+
+FetchTargetPtr
+FTQ::find(ThreadID tid, FTSeqNum ft_seq_num)
+{
+    for (const auto &ft : ftq[tid]) {
+        if (ft->ftNum() == ft_seq_num) {
+            return ft;
+        }
+    }
+
+    return nullptr;
+}
+
+bool
+FTQ::revisePrediction(ThreadID tid, FTSeqNum ft_seq_num, bool pred_taken,
+                      const PCStateBase &pred_pc, size_t predictor_stage)
+{
+    FetchTargetRevisionPolicy::QueueState queue_state =
+        FetchTargetRevisionPolicy::Ready;
+    if (ftqStatus[tid] == Locked) {
+        queue_state = FetchTargetRevisionPolicy::Locked;
+    } else if (ftqStatus[tid] == Invalid) {
+        queue_state = FetchTargetRevisionPolicy::Invalid;
+    }
+
+    FetchTargetRevisionPolicy revision_policy(queue_state);
+
+    auto it = std::find_if(ftq[tid].begin(), ftq[tid].end(),
+                           [ft_seq_num](const FetchTargetPtr &ft) {
+                               return ft->ftNum() == ft_seq_num;
+                           });
+    if (it == ftq[tid].end()) {
+        return false;
+    }
+
+    const bool is_head = (it == ftq[tid].begin());
+    if (!revision_policy.allowsRevision(is_head)) {
+        return false;
+    }
+
+    (*it)->revisePrediction(pred_taken, pred_pc, predictor_stage);
+    return true;
 }
 
 void

@@ -39,8 +39,10 @@
 #define __CPU_O3_BAC_HH__
 
 #include <list>
+#include <optional>
 
 #include "base/statistics.hh"
+#include "cpu/o3/bac_redirect_policy.hh"
 #include "cpu/o3/comm.hh"
 #include "cpu/o3/dyn_inst_ptr.hh"
 #include "cpu/o3/limits.hh"
@@ -213,6 +215,10 @@ class BAC
     /** Check the backward signals that update the BPU. */
     bool checkAndUpdateBPUSignals(ThreadID tid);
 
+    /** Check for internal predictor corrections produced by a pipelined BPU.
+     *  Returns true if BAC state changed. */
+    bool checkAndApplyPredictorCorrection(ThreadID tid);
+
   private:
     /* ----------------------------------------------------------------
      * Decoupled Frontend Functionality
@@ -359,6 +365,10 @@ class BAC
 
     /** The decoupled PC which runs ahead of fetch */
     std::unique_ptr<PCStateBase> bacPC[MaxThreads];
+
+    /** Predictor corrections popped from the BPU but not yet revisable in
+     *  the FTQ. BAC retries these before polling a newer correction. */
+    PredictorCorrectionBuffer pendingPredictorCorrection[MaxThreads];
 
     /** Variable that tracks if BAC has written to the time buffer this
      * cycle. Used to tell CPU if there is activity this cycle.

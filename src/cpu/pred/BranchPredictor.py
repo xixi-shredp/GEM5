@@ -264,6 +264,53 @@ class LocalBP(ConditionalPredictor):
     localCtrBits = Param.Unsigned(2, "Bits per counter")
 
 
+class PipelinedBPredUnit(BranchPredictor):
+    type = "PipelinedBPredUnit"
+    cxx_class = "gem5::branch_prediction::PipelinedBPredUnit"
+    cxx_header = "cpu/pred/pipelined_bpred_unit.hh"
+
+    stagePredictors = VectorParam.ConditionalPredictor(
+        [],
+        "Ordered list of child direction predictors from fastest to slowest",
+    )
+    stageLatencies = VectorParam.Cycles(
+        [],
+        "Per-stage predictor latency in cycles",
+    )
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        if len(self.stagePredictors) == 0:
+            raise ValueError(
+                "PipelinedBPredUnit requires at least one stage predictor"
+            )
+
+        if len(self.stagePredictors) != len(self.stageLatencies):
+            raise ValueError(
+                "stagePredictors and stageLatencies must have the same "
+                "number of entries"
+            )
+
+        if self.stagePredictors[0] is not self.conditionalBranchPred:
+            raise ValueError(
+                "stagePredictors[0] must match conditionalBranchPred"
+            )
+
+        if int(self.stageLatencies[0]) != 0:
+            raise ValueError("stageLatencies[0] must be 0")
+
+        if any(
+            later < earlier
+            for earlier, later in zip(
+                self.stageLatencies, self.stageLatencies[1:]
+            )
+        ):
+            raise ValueError(
+                "stageLatencies must be monotonically nondecreasing"
+            )
+
+
 class TournamentBP(ConditionalPredictor):
     type = "TournamentBP"
     cxx_class = "gem5::branch_prediction::TournamentBP"

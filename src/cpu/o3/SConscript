@@ -88,6 +88,9 @@ if env['CONF']['BUILD_ISA']:
     DebugFlag('StoreSet')
     DebugFlag('Writeback')
 
+    GTest('ftq.test', 'ftq.test.cc')
+    GTest('bac.test', 'bac.test.cc')
+
     CompoundFlag('O3CPUAll', [ 'BAC', 'FTQ', 'Fetch', 'Decode', 'Rename',
         'IEW', 'Commit',
         'IQ', 'ROB', 'FreeList', 'LSQ', 'LSQUnit', 'StoreSet', 'MemDepUnit',

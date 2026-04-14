@@ -42,6 +42,7 @@
 #include "arch/generic/pcstate.hh"
 #include "base/trace.hh"
 #include "cpu/inst_seq.hh"
+#include "cpu/o3/bac_redirect_policy.hh"
 #include "cpu/o3/dyn_inst.hh"
 #include "cpu/o3/ftq.hh"
 #include "cpu/o3/limits.hh"
@@ -102,6 +103,7 @@ BAC::BAC(CPU *_cpu, const BaseO3CPUParams &params)
     for (int i = 0; i < MaxThreads; i++) {
         bacPC[i].reset(params.isa[0]->newPCState());
         stalls[i] = {false, false, false};
+        pendingPredictorCorrection[i].resolve();
     }
 }
 
@@ -153,6 +155,7 @@ BAC::clearStates(ThreadID tid)
     stalls[tid].fetch = false;
     stalls[tid].drain = false;
     stalls[tid].bpu = false;
+    pendingPredictorCorrection[tid].resolve();
 
     assert(ftq != nullptr);
     ftq->resetState(tid);
@@ -374,9 +377,21 @@ BAC::checkAndUpdateBPUSignals(ThreadID tid)
 bool
 BAC::checkSignalsAndUpdate(ThreadID tid)
 {
+    const FrontendRedirectSignals redirect_signals = {
+        fromCommit->commitInfo[tid].squash,
+        static_cast<bool>(fromCommit->commitInfo[tid].doneSeqNum),
+        fromDecode->decodeInfo[tid].squash,
+        fromFetch->fetchInfo[tid].squash,
+    };
+
     // Check if there's a squash signal, squash if there is.
     // Check stall signals, block if necessary.
     if (checkAndUpdateBPUSignals(tid)) {
+        return true;
+    }
+
+    if (BACRedirectPolicy::checkPredictorCorrectionFirst(redirect_signals) &&
+        checkAndApplyPredictorCorrection(tid)) {
         return true;
     }
 
@@ -458,6 +473,101 @@ BAC::checkSignalsAndUpdate(ThreadID tid)
     // If we've reached this point, we have not gotten any signals that
     // cause BAC to change its status.  BAC remains the same as before.
     return false;
+}
+
+bool
+BAC::checkAndApplyPredictorCorrection(ThreadID tid)
+{
+    if (!decoupledFrontEnd) {
+        return false;
+    }
+
+    bpu->tick(tid);
+
+    auto &pending = pendingPredictorCorrection[tid];
+    if (!pending.current().has_value()) {
+        auto correction = bpu->takeFrontendCorrection(tid);
+        if (correction.has_value()) {
+            pending.tryFill(*correction);
+        }
+    }
+
+    if (!pending.current().has_value()) {
+        return false;
+    }
+
+    const auto correction = *pending.current();
+    auto ft = ftq->find(tid, correction.seqNum);
+    std::unique_ptr<PCStateBase> corrected_pc;
+    bool has_target = false;
+    if (ft) {
+        const auto branch_inst = bpu->BTBGetInst(tid, ft->endAddress());
+        const auto inst_size = branch_inst ? branch_inst->size() : minInstSize;
+        const auto target_plan =
+            BACRedirectPolicy::planPredictorCorrectionTarget(
+                correction.taken, ft->endAddress(), inst_size);
+
+        corrected_pc.reset(ft->readEndPC().clone());
+        if (target_plan.requiresBtbTarget) {
+            auto branch_pc =
+                std::unique_ptr<PCStateBase>(ft->readEndPC().clone());
+            const auto *target = bpu->BTBLookup(tid, *branch_pc);
+            if (target) {
+                set(corrected_pc, *target);
+                has_target = true;
+            }
+        } else {
+            corrected_pc->set(*target_plan.fallthroughTarget);
+            has_target = true;
+        }
+    }
+
+    bool revisable = false;
+    if (ft && has_target) {
+        revisable =
+            ftq->revisePrediction(tid, correction.seqNum, correction.taken,
+                                  *corrected_pc, correction.stageIndex);
+    }
+
+    const auto disposition = BACRedirectPolicy::decidePredictorCorrection(
+        ft != nullptr, has_target, revisable);
+    const auto decision =
+        BACRedirectPolicy::finalizePredictorCorrection(pending, disposition);
+
+    switch (disposition) {
+        case PredictorCorrectionDisposition::DropStale:
+            DPRINTF(BAC,
+                    "[tid:%i, ftn:%llu] Dropping predictor correction for "
+                    "stale FTQ "
+                    "entry.\n",
+                    tid, correction.seqNum);
+            return false;
+        case PredictorCorrectionDisposition::RejectMissingTarget:
+            DPRINTF(BAC,
+                    "[tid:%i, ftn:%llu] Predictor correction requested taken "
+                    "without BTB target.\n",
+                    tid, correction.seqNum);
+            return false;
+        case PredictorCorrectionDisposition::DeferUnrevisable:
+            DPRINTF(BAC,
+                    "[tid:%i, ftn:%llu] Deferring predictor correction until "
+                    "the FTQ entry becomes revisable.\n",
+                    tid, correction.seqNum);
+            return false;
+        case PredictorCorrectionDisposition::Apply:
+            break;
+    }
+    assert(decision.triggerRedirect);
+
+    DPRINTF(BAC,
+            "[tid:%i, ftn:%llu] Applying predictor correction from stage %zu. "
+            "taken:%i target:%s\n",
+            tid, correction.seqNum, correction.stageIndex, correction.taken,
+            *corrected_pc);
+
+    squashBpuHistories(tid);
+    squash(*corrected_pc, tid);
+    return true;
 }
 
 void

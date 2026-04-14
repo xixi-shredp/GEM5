@@ -44,6 +44,7 @@ Import('*')
 SimObject('BranchPredictor.py',
     sim_objects=[
     'BranchPredictor',
+    'PipelinedBPredUnit',
     'ConditionalPredictor',
     'IndirectPredictor', 'SimpleIndirectPredictor',
     'BranchTargetBuffer', 'SimpleBTB', 'BTBIndexingPolicy', 'BTBSetAssociative',
@@ -63,6 +64,7 @@ SimObject('BranchPredictor.py',
     enums=['BranchType', 'TargetProvider'])
 
 Source('bpred_unit.cc')
+Source('pipelined_bpred_unit.cc')
 Source('2bit_local.cc')
 Source('simple_indirect.cc')
 Source('conditional.cc')
@@ -95,3 +97,5 @@ DebugFlag('Branch')
 DebugFlag('Tage')
 DebugFlag('LTage')
 DebugFlag('TageSCL')
+
+GTest('pipelined_bpred_unit.test', 'pipelined_bpred_unit.test.cc')
