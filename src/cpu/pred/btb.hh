@@ -88,6 +88,11 @@ class BranchTargetBuffer : public ClockedObject
      */
     virtual const StaticInstPtr getInst(ThreadID tid, Addr instPC) = 0;
 
+    virtual bool
+    lookupDirectionHint(ThreadID tid, Addr instPC, BranchType type)
+    {
+        return false;
+    }
 
     /** Updates the BTB with the target of a branch.
      *  @param inst_pc The address of the branch being updated.
@@ -105,6 +110,11 @@ class BranchTargetBuffer : public ClockedObject
     {
       stats.mispredict[type]++;
     }
+
+    virtual void
+    updateDirectionInfo(ThreadID tid, Addr inst_pc, BranchType type,
+                        bool actually_taken)
+    {}
 
   protected:
     /** Number of the threads for which the branch history is maintained. */

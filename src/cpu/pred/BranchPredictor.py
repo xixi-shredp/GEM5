@@ -145,6 +145,46 @@ class SimpleBTB(BranchTargetBuffer):
     )
 
 
+class DirectedBTB(BranchTargetBuffer):
+    type = "DirectedBTB"
+    cxx_class = "gem5::branch_prediction::DirectedBTB"
+    cxx_header = "cpu/pred/directed_btb.hh"
+
+    numEntries = Param.Unsigned(4096, "Number of BTB entries")
+    tagBits = Param.Unsigned(16, "Size of the BTB tags, in bits")
+    instShiftAmt = Param.Unsigned(
+        Parent.instShiftAmt, "Number of bits to shift instructions by"
+    )
+    associativity = Param.Unsigned(1, "BTB associativity")
+    btbReplPolicy = Param.BaseReplacementPolicy(
+        LRURP(), "BTB replacement policy"
+    )
+    btbIndexingPolicy = Param.BTBIndexingPolicy(
+        BTBSetAssociative(
+            assoc=Parent.associativity,
+            num_entries=Parent.numEntries,
+            set_shift=Parent.instShiftAmt,
+            tag_bits=Parent.tagBits,
+            numThreads=1,
+        ),
+        "BTB indexing policy",
+    )
+
+    takenCounterBits = Param.Unsigned(
+        2, "Number of bits in each DirectedBTB taken counter"
+    )
+    initialTakenCounter = Param.Unsigned(
+        0, "Initial value for a newly allocated DirectedBTB taken counter"
+    )
+    directedTakenThreshold = Param.Unsigned(
+        2, "Counter threshold at or above which DirectedBTB forces taken"
+    )
+    replacementCandidateThreshold = Param.Unsigned(
+        1,
+        "Entries below this threshold are preferred replacement candidates",
+    )
+
+
 class ConditionalPredictor(SimObject):
     type = "ConditionalPredictor"
     cxx_class = "gem5::branch_prediction::ConditionalPredictor"

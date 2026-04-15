@@ -77,14 +77,46 @@ PipelinedBPredUnit::predict(const StaticInstPtr &inst,
     stats.lookups[tid][brType]++;
     ppBranches->notify(1);
 
+    stats.BTBLookups++;
+    const PCStateBase *btb_target = btb->lookup(tid, pc.instAddr(), brType);
+    if (btb_target) {
+        stats.BTBHits++;
+        hist->btbHit = true;
+    }
+
     std::vector<bool> stagePredictions;
     stagePredictions.reserve(stagePredictors.size());
+
+    const bool directed_taken_hint =
+        !hist->uncond && hist->btbHit &&
+        btb->lookupDirectionHint(tid, pc.instAddr(), brType);
 
     if (hist->uncond) {
         hist->condPred = true;
         hist->stagedBpHistory.resize(stagePredictors.size());
         hist->stagedSpeculation.resize(stagePredictors.size());
         stagePredictions.assign(stagePredictors.size(), true);
+    } else if (directed_taken_hint) {
+        ++stats.condPredicted;
+        hist->condPred = true;
+        hist->stagedBpHistory.resize(stagePredictors.size());
+        hist->stagedSpeculation.resize(stagePredictors.size());
+        stagePredictions.assign(stagePredictors.size(), true);
+
+        for (size_t stageIndex = 0; stageIndex < stagePredictors.size();
+             ++stageIndex) {
+            void *stage_history = nullptr;
+            stagePredictors[stageIndex]->branchPlaceholder(
+                tid, pc.instAddr(), false, stage_history);
+
+            if (stageIndex == 0) {
+                hist->bpHistory = stage_history;
+            } else if (stage_history != nullptr) {
+                hist->stagedBpHistory.record(stageIndex, stage_history);
+            }
+        }
+
+        ++stats.condPredictedTaken;
     } else {
         ++stats.condPredicted;
         hist->stagedBpHistory.resize(stagePredictors.size());
@@ -117,16 +149,9 @@ PipelinedBPredUnit::predict(const StaticInstPtr &inst,
 
     hist->targetProvider = enums::TargetProvider::NoTarget;
 
-    stats.BTBLookups++;
-    const PCStateBase *btb_target = btb->lookup(tid, pc.instAddr(), brType);
-    if (btb_target) {
-        stats.BTBHits++;
-        hist->btbHit = true;
-
-        if (hist->predTaken) {
-            hist->targetProvider = enums::TargetProvider::BTB;
-            set(hist->target, btb_target);
-        }
+    if (btb_target && hist->predTaken) {
+        hist->targetProvider = enums::TargetProvider::BTB;
+        set(hist->target, btb_target);
     }
 
     const bool branch_detected = (hist->btbHit || !requiresBTBHit);
