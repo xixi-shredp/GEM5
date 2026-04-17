@@ -731,6 +731,56 @@ class PIFPrefetcher(QueuedPrefetcher):
         )
 
 
+class KairosPrefetcher(QueuedPrefetcher):
+    type = "KairosPrefetcher"
+    cxx_class = "gem5::prefetch::Kairos"
+    cxx_header = "mem/cache/prefetch/kairos.hh"
+
+    degree = Param.Unsigned(4, "Max chain-walk prefetches per access")
+    kd_size = Param.Unsigned(32, "Detecting Unit entries")
+    tu_size = Param.Unsigned(16, "Training Unit entries")
+    ht_sets = Param.Unsigned(4096, "Metadata cache sets")
+    ht_ways_init = Param.Unsigned(48, "Initial metadata ways per set")
+    ht_ways_min = Param.Unsigned(12, "Minimum metadata ways per set")
+    ht_ways_max = Param.Unsigned(96, "Maximum metadata ways per set")
+    tracking_window = Param.Unsigned(262144, "Accesses per PID window")
+    alpha = Param.Float(0.6, "PID alpha (utility weight)")
+    beta = Param.Float(-0.3, "PID beta (delta miss-rate weight)")
+    gamma = Param.Float(0.1, "PID gamma (second-derivative weight)")
+    theta_plus = Param.Float(0.5, "PID positive threshold")
+    theta_minus = Param.Float(-0.25, "PID negative threshold")
+    tau = Param.Float(1.2, "Miss-rate explosion threshold")
+
+    # --- LLC-metadata modeling (paper-faithful capacity/bandwidth path) ---
+    enable_llc_metadata = Param.Bool(
+        False,
+        "Model Kairos metadata as real traffic to the mem-side cache (L3)",
+    )
+    metadata_base_addr = Param.Addr(
+        0x8000000000,
+        "Base physical address of the shadow region used for metadata "
+        "traffic (must be covered by a memory responder)",
+    )
+    llc_metadata_ways_init = Param.Unsigned(
+        4, "Initial number of LLC physical ways reserved for metadata"
+    )
+    llc_metadata_ways_min = Param.Unsigned(
+        1, "Min number of LLC ways reserved for metadata"
+    )
+    llc_metadata_ways_max = Param.Unsigned(
+        8, "Max number of LLC ways reserved for metadata"
+    )
+    llc_partition = Param.WayPartitioningPolicy(
+        NULL,
+        "LLC WayPartitioningPolicy this prefetcher drives during PID resizes",
+    )
+    llc_metadata_initial_ways = VectorParam.Unsigned(
+        [],
+        "Initial LLC way indices belonging to the metadata partition "
+        "(must match the policy's initial allocation for partition_id=1)",
+    )
+
+
 class FetchDirectedPrefetcher(BasePrefetcher):
     type = "FetchDirectedPrefetcher"
     cxx_class = "gem5::prefetch::FetchDirectedPrefetcher"

@@ -345,6 +345,14 @@ class BaseCache : public ClockedObject
         bool coalesce() const override
         { return cache.coalesce(); }
 
+        bool
+        sendMetadataRequest(Addr paddr, bool is_write,
+                            RequestorID rid) override
+        {
+            return cache.sendMetadataRequestFromPrefetcher(paddr, is_write,
+                                                           rid);
+        }
+
     } accessor;
 
     /** Miss status registers */
@@ -986,6 +994,19 @@ class BaseCache : public ClockedObject
   public:
     /** System we are currently operating in. */
     System *system;
+
+    /**
+     * Inject a shadow timing-less metadata access to the mem-side cache.
+     * Used by the Kairos prefetcher to model real traffic + capacity
+     * pressure on the next-level cache for its temporal metadata without
+     * driving a full timing transaction. The access is issued as an
+     * atomic lookup (which allocates a block on miss) and any response
+     * packet is dropped.
+     *
+     * @return true when the atomic access was dispatched.
+     */
+    bool sendMetadataRequestFromPrefetcher(Addr paddr, bool is_write,
+                                           RequestorID rid);
 
     struct CacheCmdStats : public statistics::Group
     {

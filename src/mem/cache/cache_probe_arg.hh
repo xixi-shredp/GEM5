@@ -70,6 +70,23 @@ struct CacheAccessor
 
     /** Determine if cache is coalescing writes */
     virtual bool coalesce() const = 0;
+
+    /**
+     * Inject a shadow memory-side request that bypasses the cache's own
+     * access pipeline. Used by prefetchers (Kairos) that need to model a
+     * metadata lookup/write as real traffic to the next-level cache while
+     * keeping their own shadow data structures driving prediction.
+     * Default implementation drops the request silently; caches that care
+     * about this feature override it.
+     *
+     * @param paddr   physical address to access (block-aligned)
+     * @param is_write  true for write-style metadata update, false for read
+     * @param rid      requestor ID to tag the packet with
+     * @return true if a packet was enqueued, false otherwise
+     */
+    virtual bool
+    sendMetadataRequest(Addr paddr, bool is_write, RequestorID rid)
+    { return false; }
 };
 
 /**
