@@ -30,7 +30,9 @@
 #define __MEM_CACHE_PREFETCH_IPOP_MULTI_HH__
 
 #include <cstdint>
+#include <deque>
 #include <fstream>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -135,10 +137,17 @@ class IPOPMulti : public Multi
         std::vector<double> peValues;
     };
 
+    struct PendingPacket
+    {
+        PacketPtr pkt = nullptr;
+        uint64_t prefetcherIdBits = 0;
+    };
+
   public:
     explicit IPOPMulti(const IPOPMultiPrefetcherParams &p);
 
     PacketPtr getPacket() override;
+    Tick nextPrefetchReadyTime() const override;
     void notifyIpopPrefetchFill(const IPOPEventInfo &info) override;
     void notifyIpopPrefetchEviction(const IPOPEventInfo &info) override;
     void notifyIpopDemandHit(const IPOPEventInfo &info) override;
@@ -180,13 +189,17 @@ class IPOPMulti : public Multi
     Counter lastPhaseInsts;
     Counter lastPhaseCycles;
     PendingPhaseCsvRecord pendingPhaseCsvRecord;
+    std::deque<PendingPacket> pendingPackets;
 
     uint64_t getPrefetcherIdBits(uint8_t prefetcher_index) const;
     Addr tableIndex(Addr addr, unsigned int entries) const;
     Addr tableTag(Addr addr) const;
-    unsigned int prefetcherIndexFromBits(uint64_t bits) const;
+    void forEachPrefetcherBit(
+        uint64_t bits, const std::function<void(unsigned int)> &visitor) const;
     TableEntry *lookupTable(std::vector<TableEntry> &table,
                             unsigned int entries, Addr addr, bool is_secure);
+    void collectReadyPackets();
+    PendingPacket *findPendingPacket(Addr addr, bool is_secure);
     void updateLatencySums(bool access_dram, Tick latency);
     void maybeAdvancePhase();
     void evaluatePhase();

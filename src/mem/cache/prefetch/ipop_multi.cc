@@ -260,16 +260,21 @@ IPOPMulti::tableTag(Addr addr) const
     return blockIndex(addr) & mask;
 }
 
-unsigned int
-IPOPMulti::prefetcherIndexFromBits(uint64_t bits) const
+void
+IPOPMulti::forEachPrefetcherBit(
+    uint64_t bits, const std::function<void(unsigned int)> &visitor) const
 {
     fatal_if(bits == 0, "%s requires a non-zero I-POP prefetcher bitmask",
              name());
-    fatal_if((bits & (bits - 1)) != 0,
-             "%s only supports one-hot I-POP prefetcher bitmasks: %#llx",
+    fatal_if((bits >> prefetchers.size()) != 0,
+             "%s received out-of-range I-POP prefetcher bitmask: %#llx",
              name(), static_cast<unsigned long long>(bits));
 
-    return __builtin_ctzll(bits);
+    while (bits != 0) {
+        const unsigned int index = __builtin_ctzll(bits);
+        visitor(index);
+        bits &= (bits - 1);
+    }
 }
 
 IPOPMulti::TableEntry *
@@ -283,6 +288,43 @@ IPOPMulti::lookupTable(std::vector<TableEntry> &table, unsigned int entries,
     }
 
     return &entry;
+}
+
+void
+IPOPMulti::collectReadyPackets()
+{
+    for (unsigned int pf_index = 0; pf_index < prefetchers.size();
+         ++pf_index) {
+        auto *prefetcher = prefetchers[pf_index];
+        while (prefetcher->nextPrefetchReadyTime() <= curTick()) {
+            PacketPtr pkt = prefetcher->getPacket();
+            panic_if(!pkt, "Prefetcher is ready but didn't return a packet.");
+
+            PendingPacket *pending =
+                findPendingPacket(pkt->getBlockAddr(blkSize), pkt->isSecure());
+            if (pending) {
+                pending->prefetcherIdBits |= getPrefetcherIdBits(pf_index);
+                delete pkt;
+                continue;
+            }
+
+            pendingPackets.push_back(
+                PendingPacket{pkt, getPrefetcherIdBits(pf_index)});
+        }
+    }
+}
+
+IPOPMulti::PendingPacket *
+IPOPMulti::findPendingPacket(Addr addr, bool is_secure)
+{
+    for (auto &pending : pendingPackets) {
+        if (pending.pkt->getBlockAddr(blkSize) == addr &&
+            pending.pkt->isSecure() == is_secure) {
+            return &pending;
+        }
+    }
+
+    return nullptr;
 }
 
 void
@@ -697,23 +739,29 @@ IPOPMulti::maybeAdvancePhase()
 PacketPtr
 IPOPMulti::getPacket()
 {
-    lastChosenPf = (lastChosenPf + 1) % prefetchers.size();
-    uint8_t pf_turn = lastChosenPf;
+    collectReadyPackets();
 
-    for (int pf = 0; pf < prefetchers.size(); pf++) {
-        if (prefetchers[pf_turn]->nextPrefetchReadyTime() <= curTick()) {
-            PacketPtr pkt = prefetchers[pf_turn]->getPacket();
-            panic_if(!pkt, "Prefetcher is ready but didn't return a packet.");
-            pkt->pushSenderState(
-                new IPOPRequestState(getPrefetcherIdBits(pf_turn)));
-            prefetchStats.pfIssued++;
-            issuedPrefetches++;
-            return pkt;
-        }
-        pf_turn = (pf_turn + 1) % prefetchers.size();
+    if (pendingPackets.empty()) {
+        return nullptr;
     }
 
-    return nullptr;
+    PendingPacket pending = pendingPackets.front();
+    pendingPackets.pop_front();
+    pending.pkt->pushSenderState(
+        new IPOPRequestState(pending.prefetcherIdBits));
+    prefetchStats.pfIssued++;
+    issuedPrefetches++;
+    return pending.pkt;
+}
+
+Tick
+IPOPMulti::nextPrefetchReadyTime() const
+{
+    if (!pendingPackets.empty()) {
+        return curTick();
+    }
+
+    return Multi::nextPrefetchReadyTime();
 }
 
 void
@@ -726,27 +774,27 @@ IPOPMulti::notifyIpopPrefetchFill(const IPOPEventInfo &info)
     entry.prefetcherIdBits = info.prefetcherIdBits;
     entry.accessDram = info.accessDram;
 
-    const unsigned int pf_index =
-        prefetcherIndexFromBits(info.prefetcherIdBits);
-    PrefetcherCounters &counters = phaseCounters[pf_index];
-    if (info.delayedDemand) {
-        counters.delay++;
-        totalCounters[pf_index].delay++;
-    }
     const bool bus_contention =
         info.hasContentionAddr ? sameChannel(info.addr, info.contentionAddr)
                                : info.busContention;
     const bool bank_contention = info.hasContentionAddr
                                      ? sameBank(info.addr, info.contentionAddr)
                                      : info.bankContention;
-    if (bus_contention) {
-        counters.bus++;
-        totalCounters[pf_index].bus++;
-    }
-    if (bank_contention) {
-        counters.bank++;
-        totalCounters[pf_index].bank++;
-    }
+    forEachPrefetcherBit(info.prefetcherIdBits, [&](unsigned int pf_index) {
+        PrefetcherCounters &counters = phaseCounters[pf_index];
+        if (info.delayedDemand) {
+            counters.delay++;
+            totalCounters[pf_index].delay++;
+        }
+        if (bus_contention) {
+            counters.bus++;
+            totalCounters[pf_index].bus++;
+        }
+        if (bank_contention) {
+            counters.bank++;
+            totalCounters[pf_index].bank++;
+        }
+    });
 }
 
 void
@@ -774,17 +822,16 @@ IPOPMulti::notifyIpopDemandHit(const IPOPEventInfo &info)
         return;
     }
 
-    PrefetcherCounters &counters =
-        phaseCounters[prefetcherIndexFromBits(entry->prefetcherIdBits)];
-    if (entry->accessDram) {
-        counters.usefulDram++;
-        totalCounters[prefetcherIndexFromBits(entry->prefetcherIdBits)]
-            .usefulDram++;
-    } else {
-        counters.usefulLlC++;
-        totalCounters[prefetcherIndexFromBits(entry->prefetcherIdBits)]
-            .usefulLlC++;
-    }
+    forEachPrefetcherBit(entry->prefetcherIdBits, [&](unsigned int pf_index) {
+        PrefetcherCounters &counters = phaseCounters[pf_index];
+        if (entry->accessDram) {
+            counters.usefulDram++;
+            totalCounters[pf_index].usefulDram++;
+        } else {
+            counters.usefulLlC++;
+            totalCounters[pf_index].usefulLlC++;
+        }
+    });
 
     entry->valid = false;
     maybeAdvancePhase();
@@ -799,17 +846,17 @@ IPOPMulti::notifyIpopDemandMissComplete(const IPOPEventInfo &info)
     TableEntry *entry =
         lookupTable(poht, pohtEntries, info.addr, info.isSecure);
     if (entry) {
-        PrefetcherCounters &counters =
-            phaseCounters[prefetcherIndexFromBits(entry->prefetcherIdBits)];
-        if (info.accessDram) {
-            counters.pollutionDram++;
-            totalCounters[prefetcherIndexFromBits(entry->prefetcherIdBits)]
-                .pollutionDram++;
-        } else {
-            counters.pollutionLlC++;
-            totalCounters[prefetcherIndexFromBits(entry->prefetcherIdBits)]
-                .pollutionLlC++;
-        }
+        forEachPrefetcherBit(
+            entry->prefetcherIdBits, [&](unsigned int pf_index) {
+                PrefetcherCounters &counters = phaseCounters[pf_index];
+                if (info.accessDram) {
+                    counters.pollutionDram++;
+                    totalCounters[pf_index].pollutionDram++;
+                } else {
+                    counters.pollutionLlC++;
+                    totalCounters[pf_index].pollutionLlC++;
+                }
+            });
 
         entry->valid = false;
     }
