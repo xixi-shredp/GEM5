@@ -175,6 +175,34 @@ class IPOPMultiPrefetcher(MultiPrefetcher):
     bank_bits = Param.Unsigned(5, "Number of I-POP bank index bits")
 
 
+class BanditPrefetcher(MultiPrefetcher):
+    """Micro-Armed Bandit (DUCB) prefetcher manager.
+
+    Each arm is a bitmask over the `prefetchers` list; bit i = 1 enables
+    sub-prefetcher i for that arm. The agent uses the Discounted UCB
+    algorithm from Gerogiannis & Torrellas, MICRO'23.
+    """
+
+    type = "BanditPrefetcher"
+    cxx_class = "gem5::prefetch::Bandit"
+    cxx_header = "mem/cache/prefetch/bandit.hh"
+
+    arm_masks = VectorParam.UInt64(
+        [], "Per-arm bitmask over the sub-prefetcher list"
+    )
+    gamma = Param.Float(0.999, "DUCB discount factor in (0, 1]")
+    c = Param.Float(0.04, "Exploration constant")
+    bandit_step = Param.UInt64(
+        1000, "Main-loop bandit step duration (L2 demand accesses)"
+    )
+    bandit_step_rr = Param.UInt64(
+        1000, "Initial round-robin bandit step duration (L2 demand accesses)"
+    )
+    cpu = Param.BaseCPU(
+        Parent.any, "CPU used to read committed instruction counts"
+    )
+
+
 class QueuedPrefetcher(BasePrefetcher):
     type = "QueuedPrefetcher"
     abstract = True
