@@ -227,7 +227,7 @@ Queued::notify(const CacheAccessProbeArg &acc, const PrefetchInfo &pfi)
     std::vector<AddrPriority> addresses;
     calculatePrefetch(pfi, addresses, cache);
 
-    // Child prefetchers interpret I-POP aggressiveness themselves.
+    // Get the maximum number of prefetches that we are allowed to generate
     size_t max_pfs = getMaxPermittedPrefetches(addresses.size());
 
     // Queue up generated prefetches
@@ -372,8 +372,11 @@ Queued::alreadyInQueue(std::list<DeferredPacket> &queue,
 {
     bool found = false;
     iterator it;
-    for (it = queue.begin(); it != queue.end() && !found; it++) {
+    for (it = queue.begin(); it != queue.end() && !found;) {
         found = it->pfInfo.sameAddr(pfi);
+        if (!found) {
+            ++it;
+        }
     }
 
     /* If the address is already in the queue, update priority and leave */
@@ -515,8 +518,12 @@ void
 Queued::addToQueue(std::list<DeferredPacket> &queue,
                              DeferredPacket &dpp)
 {
+    const auto queue_limit = (&queue == &pfqMissingTranslation)
+                                 ? missingTranslationQueueSize
+                                 : queueSize;
+
     /* Verify prefetch buffer space for request */
-    if (queue.size() == queueSize) {
+    if (queue.size() == queue_limit) {
         statsQueued.pfRemovedFull++;
         /* Lowest priority packet */
         iterator it = queue.end();
