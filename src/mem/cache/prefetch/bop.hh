@@ -49,6 +49,7 @@
 #ifndef __MEM_CACHE_PREFETCH_BOP_HH__
 #define __MEM_CACHE_PREFETCH_BOP_HH__
 
+#include <algorithm>
 #include <queue>
 
 #include "mem/cache/prefetch/queued.hh"
@@ -172,9 +173,15 @@ class BOP : public Queued
     public:
         /** The prefetch degree, i.e. the number of prefetches to generate */
         unsigned int degree;
+        unsigned int runtimeDegree;
 
         BOP(const BOPPrefetcherParams &p);
         ~BOP() = default;
+
+        void setIpopAggressivenessLevel(unsigned int level) override;
+        unsigned int
+        getIpopMaxAggressivenessLevel() const override
+        { return std::max(1U, degree); }
 
         void calculatePrefetch(const PrefetchInfo &pfi,
                                std::vector<AddrPriority> &addresses,

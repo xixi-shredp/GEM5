@@ -40,6 +40,7 @@
 
 #include <cstdint>
 #include <list>
+#include <string>
 #include <utility>
 
 #include "arch/generic/mmu.hh"
@@ -176,6 +177,13 @@ class Queued : public Base
     /** Percentage of requests that can be throttled */
     const unsigned int throttleControlPct;
 
+    /** Whether I-POP allows this prefetcher to enqueue candidates. */
+    bool ipopEnabled;
+
+    /** Current I-POP aggressiveness level for child-specific runtime control.
+     */
+    unsigned int ipopAggressivenessLevel;
+
     struct QueuedStats : public statistics::Group
     {
         QueuedStats(statistics::Group *parent);
@@ -204,6 +212,19 @@ class Queued : public Base
                                    std::vector<AddrPriority> &addresses,
                                    const CacheAccessor &cache) = 0;
     PacketPtr getPacket() override;
+
+    void setIpopEnabled(bool enabled) override;
+    bool
+    getIpopEnabled() const override
+    { return ipopEnabled; }
+
+    void setIpopAggressivenessLevel(unsigned int level) override;
+    unsigned int
+    getIpopAggressivenessLevel() const override
+    { return ipopAggressivenessLevel; }
+    unsigned int
+    getIpopMaxAggressivenessLevel() const override
+    { return 1; }
 
     Tick nextPrefetchReadyTime() const override
     {
@@ -261,7 +282,6 @@ class Queued : public Base
      * @return the number of these request candidates are allowed to be created
      */
     size_t getMaxPermittedPrefetches(size_t total) const;
-
     RequestPtr createPrefetchRequest(Addr addr, PrefetchInfo const &pfi,
                                         PacketPtr pkt);
 };

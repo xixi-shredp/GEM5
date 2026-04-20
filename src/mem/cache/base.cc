@@ -57,6 +57,7 @@
 #include "mem/cache/mshr.hh"
 #include "mem/cache/mshr_queue.hh"
 #include "mem/cache/prefetch/base.hh"
+#include "mem/cache/prefetch/ipop_info.hh"
 #include "mem/cache/queue_entry.hh"
 #include "mem/cache/tags/compressed_tags.hh"
 #include "mem/cache/tags/partitioning_policies/partition_manager.hh"
@@ -332,7 +333,11 @@ BaseCache::handleTimingReqHit(PacketPtr pkt, CacheBlk *blk, Tick request_time)
         assert(pkt->headerDelay == 0);
         assert(pkt->payloadDelay == 0);
 
+        const bool respond_to_cache = pkt->fromCache();
         pkt->makeTimingResponse();
+        if (respond_to_cache) {
+            pkt->pushSenderState(new prefetch::IPOPResponseState(false));
+        }
 
         // In this case we are considering request_time that takes
         // into account the delay of the xbar, if any, and just
@@ -498,7 +503,11 @@ BaseCache::recvTimingReq(PacketPtr pkt)
     if (satisfied) {
         // notify before anything else as later handleTimingReqHit might turn
         // the packet in a response
-        ppHit->notify(CacheAccessProbeArg(pkt,accessor));
+        ppHit->notify(CacheAccessProbeArg(pkt, accessor));
+        if (prefetcher && pkt->isDemand()) {
+            prefetcher->notifyIpopDemandHit(prefetch::Base::IPOPEventInfo(
+                pkt->getBlockAddr(blkSize), pkt->isSecure(), 0, false));
+        }
 
         if (prefetcher && blk && blk->wasPrefetched()) {
             DPRINTF(Cache, "Hit on prefetch for addr %#x (%s)\n",
@@ -565,7 +574,16 @@ BaseCache::recvTimingResp(PacketPtr pkt)
 
     // we have dealt with any (uncacheable) writes above, from here on
     // we know we are dealing with an MSHR due to a miss or a prefetch
-    MSHR *mshr = dynamic_cast<MSHR*>(pkt->popSenderState());
+    bool response_access_dram = !pkt->cacheResponding();
+    Packet::SenderState *sender_state = pkt->popSenderState();
+    if (auto *ipop_state =
+            dynamic_cast<prefetch::IPOPResponseState *>(sender_state)) {
+        response_access_dram = ipop_state->accessDram;
+        delete ipop_state;
+        sender_state = pkt->popSenderState();
+    }
+
+    MSHR *mshr = dynamic_cast<MSHR *>(sender_state);
     assert(mshr);
 
     if (mshr == noTargetMSHR) {
@@ -574,14 +592,19 @@ BaseCache::recvTimingResp(PacketPtr pkt)
         noTargetMSHR = nullptr;
     }
 
-    // Initial target is used just for stats
-    const QueueEntry::Target *initial_tgt = mshr->getTarget();
-    const Tick miss_latency = curTick() - initial_tgt->recvTime;
-    if (pkt->req->isUncacheable()) {
+    // noTargetMSHR entries can complete without any remaining targets.
+    const QueueEntry::Target *initial_tgt =
+        mshr->hasTargets() ? mshr->getTarget() : nullptr;
+    const Tick miss_latency =
+        initial_tgt ? curTick() - initial_tgt->recvTime : 0;
+    const bool initial_tgt_is_demand =
+        initial_tgt && initial_tgt->pkt && initial_tgt->pkt->isDemand();
+    mshr->setIpopAccessDram(response_access_dram);
+    if (pkt->req->isUncacheable() && initial_tgt) {
         assert(pkt->req->requestorId() < system->maxRequestors());
         stats.cmdStats(initial_tgt->pkt)
             .mshrUncacheableLatency[pkt->req->requestorId()] += miss_latency;
-    } else {
+    } else if (initial_tgt) {
         assert(pkt->req->requestorId() < system->maxRequestors());
         stats.cmdStats(initial_tgt->pkt)
             .mshrMissLatency[pkt->req->requestorId()] += miss_latency;
@@ -605,7 +628,34 @@ BaseCache::recvTimingResp(PacketPtr pkt)
 
         const bool allocate = (writeAllocator && mshr->wasWholeLineWrite) ?
             writeAllocator->allocate() : mshr->allocOnFill();
-        blk = handleFill(pkt, blk, writebacks, allocate);
+        const bool access_dram = mshr->getIpopAccessDram();
+        bool delayed_demand = false;
+        Addr contention_addr = 0;
+        bool has_contention_addr = false;
+        if (mshr->getIpopPrefetcherIdBits() != 0) {
+            for (const auto *other_mshr : mshrQueue.getAllocated()) {
+                if (other_mshr == mshr || !other_mshr->hasTargets()) {
+                    continue;
+                }
+
+                const auto *target =
+                    static_cast<const MSHR::Target *>(other_mshr->getTarget());
+                if (target->source != MSHR::Target::FromCPU) {
+                    continue;
+                }
+
+                delayed_demand = true;
+                if (access_dram) {
+                    contention_addr = other_mshr->blkAddr;
+                    has_contention_addr = true;
+                }
+                break;
+            }
+        }
+        blk = handleFill(pkt, blk, writebacks, allocate,
+                         mshr->getIpopPrefetcherIdBits(), access_dram,
+                         delayed_demand, false, false, contention_addr,
+                         has_contention_addr);
         assert(blk != nullptr);
         ppFill->notify(CacheAccessProbeArg(pkt, accessor));
     }
@@ -635,6 +685,11 @@ BaseCache::recvTimingResp(PacketPtr pkt)
     }
 
     serviceMSHRTargets(mshr, pkt, blk);
+    if (prefetcher && initial_tgt_is_demand) {
+        prefetcher->notifyIpopDemandMissComplete(prefetch::Base::IPOPEventInfo(
+            pkt->getBlockAddr(blkSize), pkt->isSecure(), 0,
+            mshr->getIpopAccessDram(), miss_latency));
+    }
     // We are stopping servicing targets early for the Locked RMW Read until
     // the write comes.
     if (!mshr->hasLockedRMWReadTarget()) {
@@ -1567,9 +1622,12 @@ BaseCache::maintainClusivity(bool from_cache, CacheBlk *blk)
     }
 }
 
-CacheBlk*
+CacheBlk *
 BaseCache::handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
-                      bool allocate)
+                      bool allocate, uint64_t ipop_prefetcher_id_bits,
+                      bool ipop_access_dram, bool ipop_delayed_demand,
+                      bool ipop_bus_contention, bool ipop_bank_contention,
+                      Addr ipop_contention_addr, bool ipop_has_contention_addr)
 {
     assert(pkt->isResponse());
     Addr addr = pkt->getAddr();
@@ -1587,7 +1645,10 @@ BaseCache::handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
 
         // need to do a replacement if allocating, otherwise we stick
         // with the temporary storage
-        blk = allocate ? allocateBlock(pkt, writebacks) : nullptr;
+        blk = allocate
+                  ? allocateBlock(pkt, writebacks, ipop_prefetcher_id_bits,
+                                  ipop_access_dram)
+                  : nullptr;
 
         if (!blk) {
             // No replaceable block or a mostly exclusive
@@ -1610,6 +1671,13 @@ BaseCache::handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
     assert(regenerateBlkAddr(blk) == addr);
 
     blk->setCoherenceBits(CacheBlk::ReadableBit);
+    if (prefetcher && ipop_prefetcher_id_bits != 0) {
+        prefetcher->notifyIpopPrefetchFill(prefetch::Base::IPOPEventInfo(
+            pkt->getBlockAddr(blkSize), pkt->isSecure(),
+            ipop_prefetcher_id_bits, ipop_access_dram, 0, ipop_delayed_demand,
+            ipop_bus_contention, ipop_bank_contention, ipop_contention_addr,
+            ipop_has_contention_addr));
+    }
 
     // sanity check for whole-line writes, which should always be
     // marked as writable as part of the fill, and then later marked
@@ -1663,8 +1731,10 @@ BaseCache::handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
     return blk;
 }
 
-CacheBlk*
-BaseCache::allocateBlock(const PacketPtr pkt, PacketList &writebacks)
+CacheBlk *
+BaseCache::allocateBlock(const PacketPtr pkt, PacketList &writebacks,
+                         uint64_t ipop_prefetcher_id_bits,
+                         bool ipop_access_dram)
 {
     // Get address
     const Addr addr = pkt->getAddr();
@@ -1704,10 +1774,22 @@ BaseCache::allocateBlock(const PacketPtr pkt, PacketList &writebacks)
 
     // Print victim block's information
     DPRINTF(CacheRepl, "Replacement victim: %s\n", victim->print());
+    const bool notify_ipop_eviction =
+        prefetcher && ipop_prefetcher_id_bits != 0 && victim->isValid();
+    const Addr victim_addr =
+        notify_ipop_eviction ? regenerateBlkAddr(victim) : 0;
+    const bool victim_secure =
+        notify_ipop_eviction ? victim->isSecure() : false;
 
     // Try to evict blocks; if it fails, give up on allocation
     if (!handleEvictions(evict_blks, writebacks)) {
         return nullptr;
+    }
+
+    if (notify_ipop_eviction) {
+        prefetcher->notifyIpopPrefetchEviction(prefetch::Base::IPOPEventInfo(
+            victim_addr, victim_secure, ipop_prefetcher_id_bits,
+            ipop_access_dram));
     }
 
     // Insert new block at victimized entry

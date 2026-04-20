@@ -51,15 +51,22 @@ namespace prefetch
 {
 BOP::BOP(const BOPPrefetcherParams &p)
     : Queued(p),
-      scoreMax(p.score_max), roundMax(p.round_max),
-      badScore(p.bad_score), rrEntries(p.rr_size),
+      scoreMax(p.score_max),
+      roundMax(p.round_max),
+      badScore(p.bad_score),
+      rrEntries(p.rr_size),
       tagMask((1 << p.tag_bits) - 1),
       delayQueueEnabled(p.delay_queue_enable),
       delayQueueSize(p.delay_queue_size),
       delayTicks(cyclesToTicks(p.delay_queue_cycles)),
-      delayQueueEvent([this]{ delayQueueEventWrapper(); }, name()),
-      issuePrefetchRequests(false), bestOffset(1), phaseBestOffset(0),
-      bestScore(0), round(0), degree(p.degree)
+      delayQueueEvent([this] { delayQueueEventWrapper(); }, name()),
+      issuePrefetchRequests(false),
+      bestOffset(1),
+      phaseBestOffset(0),
+      bestScore(0),
+      round(0),
+      degree(p.degree),
+      runtimeDegree(p.degree)
 {
     if (!isPowerOf2(rrEntries)) {
         fatal("%s: number of RR entries is not power of 2\n", name());
@@ -114,6 +121,13 @@ BOP::BOP(const BOPPrefetcherParams &p)
     }
 
     offsetsListIterator = offsetsList.begin();
+}
+
+void
+BOP::setIpopAggressivenessLevel(unsigned int level)
+{
+    Queued::setIpopAggressivenessLevel(level);
+    runtimeDegree = level;
 }
 
 void
@@ -313,7 +327,7 @@ BOP::calculatePrefetch(const PrefetchInfo &pfi,
     bestOffsetLearning(addr);
 
     if (issuePrefetchRequests) {
-        for (int i = 1; i <= degree; i++) {
+        for (unsigned int i = 1; i <= runtimeDegree; i++) {
             Addr prefetch_addr = addr + ((i * bestOffset) << lBlkSize);
             addresses.push_back(AddrPriority(prefetch_addr, 0));
             DPRINTF(HWPrefetch, "Generated prefetch %#lx\n", prefetch_addr);

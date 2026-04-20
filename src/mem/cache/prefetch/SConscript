@@ -30,7 +30,7 @@ Import('*')
 
 SimObject('Prefetcher.py', sim_objects=[
     'BasePrefetcher', 'MultiPrefetcher', 'SandboxMultiPrefetchers',
-    'ReSemblePrefetcher', 'QueuedPrefetcher',
+    'IPOPMultiPrefetcher', 'ReSemblePrefetcher', 'QueuedPrefetcher',
     'StridePrefetcherHashedSetAssociative', 'StridePrefetcher',
     'SmsPrefetcher', 'TaggedPrefetcher', 'IndirectMemoryPrefetcher',
     'SignaturePathPrefetcher', 'SignaturePathPrefetcherV2',
@@ -46,6 +46,7 @@ DebugFlag('BertiPrefetcher')
 
 Source('access_map_pattern_matching.cc')
 Source('base.cc')
+Source('ipop_multi.cc')
 Source('multi.cc')
 Source('bingo.cc')
 Source('berti.cc')

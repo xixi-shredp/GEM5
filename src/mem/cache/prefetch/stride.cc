@@ -46,6 +46,7 @@
 
 #include "mem/cache/prefetch/stride.hh"
 
+#include <algorithm>
 #include <cassert>
 
 #include "base/intmath.hh"
@@ -80,16 +81,24 @@ Stride::StrideEntry::invalidate()
 }
 
 Stride::Stride(const StridePrefetcherParams &p)
-  : Queued(p),
-    initConfidence(p.confidence_counter_bits, p.initial_confidence),
-    threshConf(p.confidence_threshold/100.0),
-    useRequestorId(p.use_requestor_id),
-    degree(p.degree),
-    distance(p.distance),
-    pcTableInfo(p.table_assoc, p.table_entries, p.table_indexing_policy,
-                p.table_replacement_policy),
-    useCachelineAddr(p.use_cache_line_address)
+    : Queued(p),
+      initConfidence(p.confidence_counter_bits, p.initial_confidence),
+      threshConf(p.confidence_threshold / 100.0),
+      useRequestorId(p.use_requestor_id),
+      degree(p.degree),
+      runtimeDegree(std::max(1, p.degree)),
+      distance(p.distance),
+      pcTableInfo(p.table_assoc, p.table_entries, p.table_indexing_policy,
+                  p.table_replacement_policy),
+      useCachelineAddr(p.use_cache_line_address)
 {
+}
+
+void
+Stride::setIpopAggressivenessLevel(unsigned int level)
+{
+    Queued::setIpopAggressivenessLevel(level);
+    runtimeDegree = level;
 }
 
 Stride::PCTable&
@@ -191,7 +200,7 @@ Stride::calculatePrefetch(const PrefetchInfo &pfi,
 
         Addr new_addr = pf_addr + distance * prefetch_stride;
         // Generate up to degree prefetches
-        for (int d = 1; d <= degree; d++) {
+        for (unsigned int d = 1; d <= runtimeDegree; d++) {
             new_addr += prefetch_stride;
             addresses.push_back(AddrPriority(new_addr, 0));
         }

@@ -126,6 +126,15 @@ class MSHR : public QueueEntry, public Printable
     /** True if the entry is just a simple forward from an upper level */
     bool isForward;
 
+    /** I-POP phase-local timestamp captured when the miss allocates. */
+    Tick ipopTimestamp;
+
+    /** One-hot prefetcher source bits for a prefetch miss, or zero. */
+    uint64_t ipopPrefetcherIdBits;
+
+    /** Whether this miss was ultimately serviced by DRAM. */
+    bool ipopAccessDram;
+
     class Target : public QueueEntry::Target
     {
       public:
@@ -341,6 +350,27 @@ class MSHR : public QueueEntry, public Printable
         return targets.allocOnFill;
     }
 
+    void
+    setIpopTimestamp(Tick tick)
+    { ipopTimestamp = tick; }
+    Tick
+    getIpopTimestamp() const
+    { return ipopTimestamp; }
+
+    void
+    setIpopPrefetcherIdBits(uint64_t bits)
+    { ipopPrefetcherIdBits = bits; }
+    uint64_t
+    getIpopPrefetcherIdBits() const
+    { return ipopPrefetcherIdBits; }
+
+    void
+    setIpopAccessDram(bool access_dram)
+    { ipopAccessDram = access_dram; }
+    bool
+    getIpopAccessDram() const
+    { return ipopAccessDram; }
+
     /**
      * Determine if there are non-deferred requests from other caches
      *
@@ -471,6 +501,13 @@ class MSHR : public QueueEntry, public Printable
      * @return A pointer to the first target.
      */
     QueueEntry::Target *getTarget() override
+    {
+        assert(hasTargets());
+        return &targets.front();
+    }
+
+    const QueueEntry::Target *
+    getTarget() const
     {
         assert(hasTargets());
         return &targets.front();

@@ -794,8 +794,14 @@ class BaseCache : public ClockedObject
      * @param allocate Whether to allocate a block or use the temp block
      * @return Pointer to the new cache block.
      */
-    CacheBlk *handleFill(PacketPtr pkt, CacheBlk *blk,
-                         PacketList &writebacks, bool allocate);
+    CacheBlk *handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
+                         bool allocate, uint64_t ipop_prefetcher_id_bits = 0,
+                         bool ipop_access_dram = false,
+                         bool ipop_delayed_demand = false,
+                         bool ipop_bus_contention = false,
+                         bool ipop_bank_contention = false,
+                         Addr ipop_contention_addr = 0,
+                         bool ipop_has_contention_addr = false);
 
     /**
      * Allocate a new block and perform any necessary writebacks
@@ -809,7 +815,9 @@ class BaseCache : public ClockedObject
      * @param writebacks A list of writeback packets for the evicted blocks
      * @return the allocated block
      */
-    CacheBlk *allocateBlock(const PacketPtr pkt, PacketList &writebacks);
+    CacheBlk *allocateBlock(const PacketPtr pkt, PacketList &writebacks,
+                            uint64_t ipop_prefetcher_id_bits = 0,
+                            bool ipop_access_dram = false);
     /**
      * Evict a cache block.
      *

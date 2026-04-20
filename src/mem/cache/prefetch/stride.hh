@@ -104,6 +104,7 @@ class Stride : public Queued
     const bool useRequestorId;
 
     const int degree;
+    unsigned int runtimeDegree;
 
     /** How far ahead of the demand stream to start prefetching.
      *
@@ -173,6 +174,11 @@ class Stride : public Queued
 
   public:
     Stride(const StridePrefetcherParams &p);
+
+    void setIpopAggressivenessLevel(unsigned int level) override;
+    unsigned int
+    getIpopMaxAggressivenessLevel() const override
+    { return degree > 0 ? static_cast<unsigned int>(degree) : 1; }
 
     void calculatePrefetch(const PrefetchInfo &pfi,
                            std::vector<AddrPriority> &addresses,
