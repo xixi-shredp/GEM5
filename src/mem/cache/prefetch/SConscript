@@ -29,7 +29,8 @@
 Import('*')
 
 SimObject('Prefetcher.py', sim_objects=[
-    'BasePrefetcher', 'MultiPrefetcher', 'QueuedPrefetcher',
+    'BasePrefetcher', 'MultiPrefetcher', 'SandboxMultiPrefetchers',
+    'QueuedPrefetcher',
     'StridePrefetcherHashedSetAssociative', 'StridePrefetcher',
     'SmsPrefetcher', 'TaggedPrefetcher', 'IndirectMemoryPrefetcher',
     'SignaturePathPrefetcher', 'SignaturePathPrefetcherV2',
@@ -48,6 +49,7 @@ Source('base.cc')
 Source('multi.cc')
 Source('bingo.cc')
 Source('berti.cc')
+Source('sandbox_multi.cc')
 Source('bop.cc')
 Source('delta_correlating_prediction_tables.cc')
 Source('irregular_stream_buffer.cc')
