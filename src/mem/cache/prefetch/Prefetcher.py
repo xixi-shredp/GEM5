@@ -167,6 +167,81 @@ class QueuedPrefetcher(BasePrefetcher):
     )
 
 
+class ReSemblePrefetcher(QueuedPrefetcher):
+    type = "ReSemblePrefetcher"
+    cxx_class = "gem5::prefetch::ReSemble"
+    cxx_header = "mem/cache/prefetch/resemble.hh"
+
+    prefetchers = VectorParam.QueuedPrefetcher(
+        [], "Child prefetchers managed by ReSemble"
+    )
+    prediction_types = VectorParam.String(
+        [], "Prediction type label for each child prefetcher"
+    )
+    hidden_dim = Param.Unsigned(32, "Hidden layer width of the controller")
+    hash_bits = Param.Unsigned(12, "Feature hashing width in bits")
+    alpha = Param.Float(0.01, "Learning rate of the controller")
+    gamma = Param.Float(0.90, "Discount factor of the controller")
+    epsilon_start = Param.Float(0.0, "Initial exploration rate")
+    epsilon_end = Param.Float(0.0, "Final exploration rate")
+    epsilon_decay = Param.Float(1.0, "Multiplicative epsilon decay")
+    reward_window = Param.Unsigned(64, "Reward accounting window size")
+    replay_capacity = Param.Unsigned(128, "Replay buffer capacity")
+    batch_size = Param.Unsigned(16, "Mini-batch size for controller updates")
+    policy_update_interval = Param.Unsigned(
+        1, "Number of accesses between online policy updates"
+    )
+    target_update_interval = Param.Unsigned(
+        8, "Number of accesses between target network refreshes"
+    )
+    seed = Param.Unsigned(1, "Deterministic seed for controller RNG")
+
+    _positive_controller_knobs = (
+        "hidden_dim",
+        "hash_bits",
+        "reward_window",
+        "replay_capacity",
+        "batch_size",
+        "policy_update_interval",
+        "target_update_interval",
+    )
+    _supported_prediction_types = frozenset(("spatial", "temporal"))
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        if len(self.prefetchers) == 0:
+            raise ValueError("prefetchers must not be empty")
+
+        if len(self.prefetchers) != len(self.prediction_types):
+            raise ValueError(
+                "prefetchers and prediction_types must have the same length"
+            )
+
+        for prediction_type in self.prediction_types:
+            if prediction_type not in self._supported_prediction_types:
+                raise ValueError(
+                    f"unsupported prediction_type '{prediction_type}'"
+                )
+
+        for knob in self._positive_controller_knobs:
+            if int(getattr(self, knob)) <= 0:
+                raise ValueError(f"{knob} must be positive")
+
+        if float(self.alpha) <= 0.0:
+            raise ValueError("alpha must be positive")
+        if not 0.0 <= float(self.gamma) <= 1.0:
+            raise ValueError("gamma must be in [0, 1]")
+        if not 0.0 <= float(self.epsilon_start) <= 1.0:
+            raise ValueError("epsilon_start must be in [0, 1]")
+        if not 0.0 <= float(self.epsilon_end) <= 1.0:
+            raise ValueError("epsilon_end must be in [0, 1]")
+        if float(self.epsilon_end) > float(self.epsilon_start):
+            raise ValueError("epsilon_end must not exceed epsilon_start")
+        if not 0.0 < float(self.epsilon_decay) <= 1.0:
+            raise ValueError("epsilon_decay must be in (0, 1]")
+
+
 class StridePrefetcherHashedSetAssociative(TaggedSetAssociative):
     type = "StridePrefetcherHashedSetAssociative"
     cxx_class = "gem5::prefetch::StridePrefetcherHashedSetAssociative"
