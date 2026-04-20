@@ -54,6 +54,21 @@ class PartitionManager(SimObject):
     )
 
 
+class KairosPartitionManager(PartitionManager):
+    type = "KairosPartitionManager"
+    cxx_header = (
+        "mem/cache/tags/partitioning_policies/kairos_partition_manager.hh"
+    )
+    cxx_class = "gem5::partitioning_policy::KairosPartitionManager"
+
+    system = Param.System(Parent.any, "System to resolve requestor names from")
+    metadata_requestor_names = VectorParam.String(
+        [],
+        "Requestor name substrings that should be tagged as partition_id=1 "
+        "(metadata). All other requestors map to partition_id=0 (data).",
+    )
+
+
 class BasePartitioningPolicy(SimObject):
     type = "BasePartitioningPolicy"
     cxx_header = "mem/cache/tags/partitioning_policies/base_pp.hh"

@@ -2798,4 +2798,30 @@ WriteAllocator::updateMode(Addr write_addr, unsigned write_size,
     nextAddr = write_addr + write_size;
 }
 
+bool
+BaseCache::sendMetadataRequestFromPrefetcher(Addr paddr, bool is_write,
+                                             RequestorID rid)
+{
+    // Align to block boundary.
+    paddr &= ~(Addr(blkSize - 1));
+
+    RequestPtr req = std::make_shared<Request>(paddr, blkSize, 0, rid);
+    req->setFlags(Request::PREFETCH);
+    req->taskId(context_switch_task_id::Prefetcher);
+
+    MemCmd cmd = is_write ? MemCmd::WriteReq : MemCmd::ReadReq;
+    PacketPtr pkt = new Packet(req, cmd);
+    pkt->allocate();
+
+    // Use sendAtomic: this reaches the next-level cache which will run its
+    // full lookup + allocation path (including PartitionManager filtering)
+    // without requiring us to track a timing response. This captures the
+    // capacity pressure exerted by Kairos metadata on the LLC way that is
+    // reserved for metadata partition_id, which is the property we need.
+    memSidePort.sendAtomic(pkt);
+
+    delete pkt;
+    return true;
+}
+
 } // namespace gem5
