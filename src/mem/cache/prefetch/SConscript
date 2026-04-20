@@ -37,7 +37,7 @@ SimObject('Prefetcher.py', sim_objects=[
     'DeltaCorrelatingPredictionTables', 'DCPTPrefetcher',
     'IrregularStreamBufferPrefetcher', 'SlimAMPMPrefetcher',
     'BOPPrefetcher', 'SBOOEPrefetcher', 'STeMSPrefetcher', 'PIFPrefetcher',
-    'FetchDirectedPrefetcher', 'BertiPrefetcher'
+    'FetchDirectedPrefetcher', 'BingoPrefetcher', 'BertiPrefetcher'
     ])
 
 DebugFlag('BertiPrefetcher')
@@ -45,6 +45,7 @@ DebugFlag('BertiPrefetcher')
 Source('access_map_pattern_matching.cc')
 Source('base.cc')
 Source('multi.cc')
+Source('bingo.cc')
 Source('berti.cc')
 Source('bop.cc')
 Source('delta_correlating_prediction_tables.cc')
