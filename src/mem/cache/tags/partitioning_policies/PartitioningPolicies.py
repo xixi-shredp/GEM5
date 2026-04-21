@@ -38,7 +38,11 @@ from m5.params import (
     VectorParam,
 )
 from m5.proxy import Parent
-from m5.SimObject import SimObject
+from m5.SimObject import (
+    PyBindMethod,
+    SimObject,
+    cxxMethod,
+)
 
 
 class PartitionManager(SimObject):
@@ -66,6 +70,20 @@ class KairosPartitionManager(PartitionManager):
         [],
         "Requestor name substrings that should be tagged as partition_id=1 "
         "(metadata). All other requestors map to partition_id=0 (data).",
+    )
+
+
+class StreamlinePartitionManager(PartitionManager):
+    type = "StreamlinePartitionManager"
+    cxx_header = "mem/cache/tags/partitioning_policies/streamline_pm.hh"
+    cxx_class = "gem5::partitioning_policy::StreamlinePartitionManager"
+
+    system = Param.System(Parent.any, "System used for requestor-name lookups")
+    metadata_partition_id = Param.UInt64(
+        1, "PartitionID assigned to Streamline metadata traffic"
+    )
+    metadata_requestor_names = VectorParam.String(
+        [], "Requestor names treated as Streamline metadata traffic"
     )
 
 
@@ -130,3 +148,37 @@ class MaxCapacityPartitioningPolicy(BasePartitioningPolicy):
         "Format: [<max_capacity>,<max_capacity>,...]"
         "Example: [0.5, 0.75]"
     )
+
+
+class StreamlinePartitioningPolicy(BasePartitioningPolicy):
+    type = "StreamlinePartitioningPolicy"
+    cxx_header = "mem/cache/tags/partitioning_policies/streamline_pp.hh"
+    cxx_class = "gem5::partitioning_policy::StreamlinePartitioningPolicy"
+    cxx_exports = [
+        PyBindMethod("setPartitionLevel"),
+        PyBindMethod("getPartitionLevel"),
+    ]
+
+    cache_associativity = Param.Unsigned(Parent.assoc, "Associativity")
+    metadata_associativity = Param.Unsigned(
+        8, "Number of LLC ways reserved for metadata in active sets"
+    )
+    max_metadata_sets = Param.Unsigned(
+        2048, "Maximum number of metadata-capable LLC sets"
+    )
+    sample_metadata_sets = Param.Unsigned(
+        64, "Number of permanent metadata sample sets"
+    )
+    initial_partition_level = Param.UInt64(
+        2, "Initial Streamline partition level: 0=0MB, 1=0.5MB, 2=1MB"
+    )
+
+    @cxxMethod
+    def debugActiveMetadataSetCount(self, partition_level):
+        pass
+
+    @cxxMethod
+    def debugAllowsEntry(
+        self, partition_id, cache_set, cache_way, partition_level
+    ):
+        pass

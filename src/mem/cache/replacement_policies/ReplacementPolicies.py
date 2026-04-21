@@ -26,7 +26,10 @@
 
 from m5.params import *
 from m5.proxy import *
-from m5.SimObject import SimObject
+from m5.SimObject import (
+    SimObject,
+    cxxMethod,
+)
 
 
 class BaseReplacementPolicy(SimObject):
@@ -175,3 +178,35 @@ class WeightedLRURP(LRURP):
     type = "WeightedLRURP"
     cxx_class = "gem5::replacement_policy::WeightedLRU"
     cxx_header = "mem/cache/replacement_policies/weighted_lru_rp.hh"
+
+
+class StreamlineMetadataRP(BaseReplacementPolicy):
+    type = "StreamlineMetadataRP"
+    cxx_class = "gem5::replacement_policy::StreamlineMetadata"
+    cxx_header = "mem/cache/replacement_policies/streamline_metadata_rp.hh"
+
+    metadata_base_addr = Param.Addr(
+        0x8000000000, "Base address of the Streamline metadata region"
+    )
+    metadata_store_assoc = Param.Unsigned(
+        8, "Number of metadata ways per active LLC metadata set"
+    )
+    metadata_store_entries = Param.Unsigned(
+        "16384", "Maximum number of 64B metadata blocks in the store"
+    )
+    metadata_line_stride = Param.Unsigned(
+        2048,
+        "Number of LLC cache lines separating Streamline partial-tag groups",
+    )
+
+    @cxxMethod
+    def debugIsMetadataAddress(self, address):
+        pass
+
+    @cxxMethod
+    def debugMetadataSet(self, address):
+        pass
+
+    @cxxMethod
+    def debugChooseVictim(self, metadata, valid, etrs, last_touch_ticks):
+        pass
