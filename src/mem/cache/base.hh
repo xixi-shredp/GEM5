@@ -48,7 +48,10 @@
 
 #include <cassert>
 #include <cstdint>
+#include <deque>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "base/addr_range.hh"
 #include "base/compiler.hh"
@@ -410,6 +413,52 @@ class BaseCache : public ClockedObject
      * hold it for deletion until a subsequent call
      */
     std::unique_ptr<Packet> pendingDelete;
+
+    struct PrefetchPollutionKey
+    {
+        Addr addr = 0;
+        bool secure = false;
+
+        bool
+        operator==(const PrefetchPollutionKey &other) const
+        {
+            return addr == other.addr && secure == other.secure;
+        }
+    };
+
+    struct PrefetchPollutionKeyHash
+    {
+        std::size_t
+        operator()(const PrefetchPollutionKey &key) const
+        {
+            return std::hash<Addr>()(key.addr) ^
+                   (std::hash<bool>()(key.secure) << 1);
+        }
+    };
+
+    struct PrefetchPollutionEntry
+    {
+        uint64_t prefetchId = 0;
+        Addr prefetchAddr = 0;
+        Tick evictTick = 0;
+        RequestorID evictedRequestor = Request::invldRequestorId;
+    };
+
+    static constexpr std::size_t prefetchPollutionShadowMaxEntries = 4096;
+
+    std::unordered_map<PrefetchPollutionKey, PrefetchPollutionEntry,
+                       PrefetchPollutionKeyHash>
+        prefetchPollutionShadow;
+    std::deque<std::pair<PrefetchPollutionKey, Tick>>
+        prefetchPollutionShadowOrder;
+    std::unordered_set<uint64_t> pollutingPrefetchIds;
+    uint64_t nextPrefetchPollutionId;
+
+    void recordPrefetchDisplacement(Addr victim_addr, bool victim_secure,
+                                    RequestorID victim_requestor,
+                                    Addr prefetch_addr, uint64_t prefetch_id);
+    bool probePrefetchPollution(const PacketPtr pkt, MSHR *mshr);
+    void commitPrefetchPollutionMiss(MSHR *mshr, Tick miss_latency);
 
     /**
      * Mark a request as in service (sent downstream in the memory
@@ -786,8 +835,9 @@ class BaseCache : public ClockedObject
      * @param allocate Whether to allocate a block or use the temp block
      * @return Pointer to the new cache block.
      */
-    CacheBlk *handleFill(PacketPtr pkt, CacheBlk *blk,
-                         PacketList &writebacks, bool allocate);
+    CacheBlk *handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
+                         bool allocate, bool from_prefetch = false,
+                         uint64_t prefetch_id = 0);
 
     /**
      * Allocate a new block and perform any necessary writebacks
@@ -801,7 +851,9 @@ class BaseCache : public ClockedObject
      * @param writebacks A list of writeback packets for the evicted blocks
      * @return the allocated block
      */
-    CacheBlk *allocateBlock(const PacketPtr pkt, PacketList &writebacks);
+    CacheBlk *allocateBlock(const PacketPtr pkt, PacketList &writebacks,
+                            bool from_prefetch = false,
+                            uint64_t prefetch_id = 0);
     /**
      * Evict a cache block.
      *
@@ -1143,6 +1195,27 @@ class BaseCache : public ClockedObject
          * factor improved).
          */
         statistics::Scalar dataContractions;
+
+        /** Pure prefetch fills that allocated a cache block. */
+        statistics::Scalar pfFillAllocations;
+
+        /** Pure prefetch fills that displaced a demand-visible block. */
+        statistics::Scalar pfFillEvictedDemand;
+
+        /** Distinct prefetch fills that later caused a demand miss. */
+        statistics::Scalar pfPollutingFills;
+
+        /** Demand misses attributed to prior prefetch displacement. */
+        statistics::Scalar pfPollutionMisses;
+
+        /** Measured latency of pollution-attributed demand MSHR misses. */
+        statistics::Scalar pfPollutionMissLatency;
+
+        /** Estimated cache-hit-adjusted latency loss from pollution misses. */
+        statistics::Formula pfPollutionLossEstimate;
+
+        /** Fraction of allocating prefetch fills that became polluting. */
+        statistics::Formula pfPollutionRate;
 
         /** Per-command statistics */
         std::vector<std::unique_ptr<CacheCmdStats>> cmd;

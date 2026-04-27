@@ -81,7 +81,7 @@ BaseCache::CacheResponsePort::CacheResponsePort(const std::string &_name,
 
 BaseCache::BaseCache(const BaseCacheParams &p, unsigned blk_size)
     : ClockedObject(p),
-      cpuSidePort (p.name + ".cpu_side_port", *this, "CpuSidePort"),
+      cpuSidePort(p.name + ".cpu_side_port", *this, "CpuSidePort"),
       memSidePort(p.name + ".mem_side_port", this, "MemSidePort"),
       accessor(*this),
       mshrQueue("MSHRs", p.mshrs, 0, p.demand_mshr_reserve, p.name),
@@ -91,9 +91,10 @@ BaseCache::BaseCache(const BaseCacheParams &p, unsigned blk_size)
       partitionManager(p.partitioning_manager),
       prefetcher(p.prefetcher),
       writeAllocator(p.write_allocator),
+      nextPrefetchPollutionId(1),
       writebackClean(p.writeback_clean),
       tempBlockWriteback(nullptr),
-      writebackTempBlockAtomicEvent([this]{ writebackTempBlockAtomic(); },
+      writebackTempBlockAtomicEvent([this] { writebackTempBlockAtomic(); },
                                     name(), false,
                                     EventBase::Delayed_Writeback_Pri),
       blkSize(blk_size),
@@ -353,6 +354,68 @@ BaseCache::handleTimingReqHit(PacketPtr pkt, CacheBlk *blk, Tick request_time)
 }
 
 void
+BaseCache::recordPrefetchDisplacement(Addr victim_addr, bool victim_secure,
+                                      RequestorID victim_requestor,
+                                      Addr prefetch_addr, uint64_t prefetch_id)
+{
+    const PrefetchPollutionKey key{victim_addr, victim_secure};
+    const Tick now = curTick();
+
+    prefetchPollutionShadow[key] = PrefetchPollutionEntry{
+        prefetch_id, prefetch_addr, now, victim_requestor};
+    prefetchPollutionShadowOrder.emplace_back(key, now);
+
+    while (prefetchPollutionShadowOrder.size() >
+           prefetchPollutionShadowMaxEntries) {
+        const auto [old_key, old_tick] = prefetchPollutionShadowOrder.front();
+        prefetchPollutionShadowOrder.pop_front();
+
+        auto it = prefetchPollutionShadow.find(old_key);
+        if (it != prefetchPollutionShadow.end() &&
+            it->second.evictTick == old_tick) {
+            prefetchPollutionShadow.erase(it);
+        }
+    }
+}
+
+bool
+BaseCache::probePrefetchPollution(const PacketPtr pkt, MSHR *mshr)
+{
+    if (!pkt || !mshr || !pkt->isDemand()) {
+        return false;
+    }
+
+    const PrefetchPollutionKey key{pkt->getBlockAddr(blkSize),
+                                   pkt->isSecure()};
+    auto it = prefetchPollutionShadow.find(key);
+    if (it == prefetchPollutionShadow.end()) {
+        return false;
+    }
+
+    mshr->setPrefetchPollution(it->second.prefetchId, it->second.evictTick);
+    prefetchPollutionShadow.erase(it);
+    return true;
+}
+
+void
+BaseCache::commitPrefetchPollutionMiss(MSHR *mshr, Tick miss_latency)
+{
+    if (!mshr || !mshr->hasPrefetchPollution()) {
+        return;
+    }
+
+    stats.pfPollutionMisses++;
+    stats.pfPollutionMissLatency += miss_latency;
+
+    const uint64_t prefetch_id = mshr->getPrefetchPollutionId();
+    if (pollutingPrefetchIds.insert(prefetch_id).second) {
+        stats.pfPollutingFills++;
+    }
+
+    mshr->clearPrefetchPollution();
+}
+
+void
 BaseCache::handleTimingReqMiss(PacketPtr pkt, MSHR *mshr, CacheBlk *blk,
                                Tick forward_time, Tick request_time)
 {
@@ -445,7 +508,8 @@ BaseCache::handleTimingReqMiss(PacketPtr pkt, MSHR *mshr, CacheBlk *blk,
             // Here we are using forward_time, modelling the latency of
             // a miss (outbound) just as forwardLatency, neglecting the
             // lookupLatency component.
-            allocateMissBuffer(pkt, forward_time);
+            MSHR *new_mshr = allocateMissBuffer(pkt, forward_time);
+            probePrefetchPollution(pkt, new_mshr);
         }
     }
 }
@@ -585,6 +649,7 @@ BaseCache::recvTimingResp(PacketPtr pkt)
         assert(pkt->req->requestorId() < system->maxRequestors());
         stats.cmdStats(initial_tgt->pkt)
             .mshrMissLatency[pkt->req->requestorId()] += miss_latency;
+        commitPrefetchPollutionMiss(mshr, miss_latency);
     }
 
     PacketList writebacks;
@@ -599,13 +664,18 @@ BaseCache::recvTimingResp(PacketPtr pkt)
 
     CacheBlk *blk = tags->findBlock({pkt->getAddr(), pkt->isSecure()});
 
+    const bool prefetch_fill =
+        is_fill && !is_error && mshr->hasOnlyPrefetchTargets();
+    const uint64_t prefetch_id = prefetch_fill ? nextPrefetchPollutionId++ : 0;
+
     if (is_fill && !is_error) {
         DPRINTF(Cache, "Block for addr %#llx being updated in Cache\n",
                 pkt->getAddr());
 
         const bool allocate = (writeAllocator && mshr->wasWholeLineWrite) ?
             writeAllocator->allocate() : mshr->allocOnFill();
-        blk = handleFill(pkt, blk, writebacks, allocate);
+        blk = handleFill(pkt, blk, writebacks, allocate, prefetch_fill,
+                         prefetch_id);
         assert(blk != nullptr);
         ppFill->notify(CacheAccessProbeArg(pkt, accessor));
     }
@@ -1567,9 +1637,9 @@ BaseCache::maintainClusivity(bool from_cache, CacheBlk *blk)
     }
 }
 
-CacheBlk*
+CacheBlk *
 BaseCache::handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
-                      bool allocate)
+                      bool allocate, bool from_prefetch, uint64_t prefetch_id)
 {
     assert(pkt->isResponse());
     Addr addr = pkt->getAddr();
@@ -1587,7 +1657,9 @@ BaseCache::handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
 
         // need to do a replacement if allocating, otherwise we stick
         // with the temporary storage
-        blk = allocate ? allocateBlock(pkt, writebacks) : nullptr;
+        blk = allocate
+                  ? allocateBlock(pkt, writebacks, from_prefetch, prefetch_id)
+                  : nullptr;
 
         if (!blk) {
             // No replaceable block or a mostly exclusive
@@ -1663,8 +1735,9 @@ BaseCache::handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
     return blk;
 }
 
-CacheBlk*
-BaseCache::allocateBlock(const PacketPtr pkt, PacketList &writebacks)
+CacheBlk *
+BaseCache::allocateBlock(const PacketPtr pkt, PacketList &writebacks,
+                         bool from_prefetch, uint64_t prefetch_id)
 {
     // Get address
     const Addr addr = pkt->getAddr();
@@ -1705,9 +1778,37 @@ BaseCache::allocateBlock(const PacketPtr pkt, PacketList &writebacks)
     // Print victim block's information
     DPRINTF(CacheRepl, "Replacement victim: %s\n", victim->print());
 
+    struct DisplacedBlock
+    {
+        Addr addr;
+        bool secure;
+        RequestorID requestor;
+    };
+    std::vector<DisplacedBlock> displaced_blocks;
+    if (from_prefetch) {
+        for (auto *evict_blk : evict_blks) {
+            if (evict_blk->isValid() && !evict_blk->wasPrefetched()) {
+                displaced_blocks.push_back({regenerateBlkAddr(evict_blk),
+                                            evict_blk->isSecure(),
+                                            evict_blk->getSrcRequestorId()});
+            }
+        }
+    }
+
     // Try to evict blocks; if it fails, give up on allocation
     if (!handleEvictions(evict_blks, writebacks)) {
         return nullptr;
+    }
+
+    if (from_prefetch) {
+        stats.pfFillAllocations++;
+        if (!displaced_blocks.empty()) {
+            stats.pfFillEvictedDemand++;
+        }
+        for (const auto &displaced : displaced_blocks) {
+            recordPrefetchDisplacement(displaced.addr, displaced.secure,
+                                       displaced.requestor, addr, prefetch_id);
+        }
     }
 
     // Insert new block at victimized entry
@@ -2260,83 +2361,106 @@ BaseCache::CacheCmdStats::regStatsFromParent()
 }
 
 BaseCache::CacheStats::CacheStats(BaseCache &c)
-    : statistics::Group(&c), cache(c),
+    : statistics::Group(&c),
+      cache(c),
 
-    ADD_STAT(demandHits, statistics::units::Count::get(),
-             "number of demand (read+write) hits"),
-    ADD_STAT(overallHits, statistics::units::Count::get(),
-             "number of overall hits"),
-    ADD_STAT(demandHitLatency, statistics::units::Tick::get(),
-             "number of demand (read+write) hit ticks"),
-    ADD_STAT(overallHitLatency, statistics::units::Tick::get(),
-            "number of overall hit ticks"),
-    ADD_STAT(demandMisses, statistics::units::Count::get(),
-             "number of demand (read+write) misses"),
-    ADD_STAT(overallMisses, statistics::units::Count::get(),
-             "number of overall misses"),
-    ADD_STAT(demandMissLatency, statistics::units::Tick::get(),
-             "number of demand (read+write) miss ticks"),
-    ADD_STAT(overallMissLatency, statistics::units::Tick::get(),
-             "number of overall miss ticks"),
-    ADD_STAT(demandAccesses, statistics::units::Count::get(),
-             "number of demand (read+write) accesses"),
-    ADD_STAT(overallAccesses, statistics::units::Count::get(),
-             "number of overall (read+write) accesses"),
-    ADD_STAT(demandMissRate, statistics::units::Ratio::get(),
-             "miss rate for demand accesses"),
-    ADD_STAT(overallMissRate, statistics::units::Ratio::get(),
-             "miss rate for overall accesses"),
-    ADD_STAT(demandAvgMissLatency, statistics::units::Rate<
-                statistics::units::Tick, statistics::units::Count>::get(),
-             "average overall miss latency in ticks"),
-    ADD_STAT(overallAvgMissLatency, statistics::units::Rate<
-                statistics::units::Tick, statistics::units::Count>::get(),
-             "average overall miss latency"),
-    ADD_STAT(blockedCycles, statistics::units::Cycle::get(),
-            "number of cycles access was blocked"),
-    ADD_STAT(blockedCauses, statistics::units::Count::get(),
-            "number of times access was blocked"),
-    ADD_STAT(avgBlocked, statistics::units::Rate<
-                statistics::units::Cycle, statistics::units::Count>::get(),
-             "average number of cycles each access was blocked"),
-    ADD_STAT(writebacks, statistics::units::Count::get(),
-             "number of writebacks"),
-    ADD_STAT(demandMshrHits, statistics::units::Count::get(),
-             "number of demand (read+write) MSHR hits"),
-    ADD_STAT(overallMshrHits, statistics::units::Count::get(),
-             "number of overall MSHR hits"),
-    ADD_STAT(demandMshrMisses, statistics::units::Count::get(),
-             "number of demand (read+write) MSHR misses"),
-    ADD_STAT(overallMshrMisses, statistics::units::Count::get(),
-            "number of overall MSHR misses"),
-    ADD_STAT(overallMshrUncacheable, statistics::units::Count::get(),
-             "number of overall MSHR uncacheable misses"),
-    ADD_STAT(demandMshrMissLatency, statistics::units::Tick::get(),
-             "number of demand (read+write) MSHR miss ticks"),
-    ADD_STAT(overallMshrMissLatency, statistics::units::Tick::get(),
-             "number of overall MSHR miss ticks"),
-    ADD_STAT(overallMshrUncacheableLatency, statistics::units::Tick::get(),
-             "number of overall MSHR uncacheable ticks"),
-    ADD_STAT(demandMshrMissRate, statistics::units::Ratio::get(),
-             "mshr miss ratio for demand accesses"),
-    ADD_STAT(overallMshrMissRate, statistics::units::Ratio::get(),
-             "mshr miss ratio for overall accesses"),
-    ADD_STAT(demandAvgMshrMissLatency, statistics::units::Rate<
-                statistics::units::Tick, statistics::units::Count>::get(),
-             "average overall mshr miss latency"),
-    ADD_STAT(overallAvgMshrMissLatency, statistics::units::Rate<
-                statistics::units::Tick, statistics::units::Count>::get(),
-             "average overall mshr miss latency"),
-    ADD_STAT(overallAvgMshrUncacheableLatency, statistics::units::Rate<
-                statistics::units::Tick, statistics::units::Count>::get(),
-             "average overall mshr uncacheable latency"),
-    ADD_STAT(replacements, statistics::units::Count::get(),
-             "number of replacements"),
-    ADD_STAT(dataExpansions, statistics::units::Count::get(),
-             "number of data expansions"),
-    ADD_STAT(dataContractions, statistics::units::Count::get(),
-             "number of data contractions"),
-    cmd(MemCmd::NUM_MEM_CMDS)
+      ADD_STAT(demandHits, statistics::units::Count::get(),
+               "number of demand (read+write) hits"),
+      ADD_STAT(overallHits, statistics::units::Count::get(),
+               "number of overall hits"),
+      ADD_STAT(demandHitLatency, statistics::units::Tick::get(),
+               "number of demand (read+write) hit ticks"),
+      ADD_STAT(overallHitLatency, statistics::units::Tick::get(),
+               "number of overall hit ticks"),
+      ADD_STAT(demandMisses, statistics::units::Count::get(),
+               "number of demand (read+write) misses"),
+      ADD_STAT(overallMisses, statistics::units::Count::get(),
+               "number of overall misses"),
+      ADD_STAT(demandMissLatency, statistics::units::Tick::get(),
+               "number of demand (read+write) miss ticks"),
+      ADD_STAT(overallMissLatency, statistics::units::Tick::get(),
+               "number of overall miss ticks"),
+      ADD_STAT(demandAccesses, statistics::units::Count::get(),
+               "number of demand (read+write) accesses"),
+      ADD_STAT(overallAccesses, statistics::units::Count::get(),
+               "number of overall (read+write) accesses"),
+      ADD_STAT(demandMissRate, statistics::units::Ratio::get(),
+               "miss rate for demand accesses"),
+      ADD_STAT(overallMissRate, statistics::units::Ratio::get(),
+               "miss rate for overall accesses"),
+      ADD_STAT(demandAvgMissLatency,
+               statistics::units::Rate<statistics::units::Tick,
+                                       statistics::units::Count>::get(),
+               "average overall miss latency in ticks"),
+      ADD_STAT(overallAvgMissLatency,
+               statistics::units::Rate<statistics::units::Tick,
+                                       statistics::units::Count>::get(),
+               "average overall miss latency"),
+      ADD_STAT(blockedCycles, statistics::units::Cycle::get(),
+               "number of cycles access was blocked"),
+      ADD_STAT(blockedCauses, statistics::units::Count::get(),
+               "number of times access was blocked"),
+      ADD_STAT(avgBlocked,
+               statistics::units::Rate<statistics::units::Cycle,
+                                       statistics::units::Count>::get(),
+               "average number of cycles each access was blocked"),
+      ADD_STAT(writebacks, statistics::units::Count::get(),
+               "number of writebacks"),
+      ADD_STAT(demandMshrHits, statistics::units::Count::get(),
+               "number of demand (read+write) MSHR hits"),
+      ADD_STAT(overallMshrHits, statistics::units::Count::get(),
+               "number of overall MSHR hits"),
+      ADD_STAT(demandMshrMisses, statistics::units::Count::get(),
+               "number of demand (read+write) MSHR misses"),
+      ADD_STAT(overallMshrMisses, statistics::units::Count::get(),
+               "number of overall MSHR misses"),
+      ADD_STAT(overallMshrUncacheable, statistics::units::Count::get(),
+               "number of overall MSHR uncacheable misses"),
+      ADD_STAT(demandMshrMissLatency, statistics::units::Tick::get(),
+               "number of demand (read+write) MSHR miss ticks"),
+      ADD_STAT(overallMshrMissLatency, statistics::units::Tick::get(),
+               "number of overall MSHR miss ticks"),
+      ADD_STAT(overallMshrUncacheableLatency, statistics::units::Tick::get(),
+               "number of overall MSHR uncacheable ticks"),
+      ADD_STAT(demandMshrMissRate, statistics::units::Ratio::get(),
+               "mshr miss ratio for demand accesses"),
+      ADD_STAT(overallMshrMissRate, statistics::units::Ratio::get(),
+               "mshr miss ratio for overall accesses"),
+      ADD_STAT(demandAvgMshrMissLatency,
+               statistics::units::Rate<statistics::units::Tick,
+                                       statistics::units::Count>::get(),
+               "average overall mshr miss latency"),
+      ADD_STAT(overallAvgMshrMissLatency,
+               statistics::units::Rate<statistics::units::Tick,
+                                       statistics::units::Count>::get(),
+               "average overall mshr miss latency"),
+      ADD_STAT(overallAvgMshrUncacheableLatency,
+               statistics::units::Rate<statistics::units::Tick,
+                                       statistics::units::Count>::get(),
+               "average overall mshr uncacheable latency"),
+      ADD_STAT(replacements, statistics::units::Count::get(),
+               "number of replacements"),
+      ADD_STAT(dataExpansions, statistics::units::Count::get(),
+               "number of data expansions"),
+      ADD_STAT(dataContractions, statistics::units::Count::get(),
+               "number of data contractions"),
+      ADD_STAT(pfFillAllocations, statistics::units::Count::get(),
+               "pure hardware prefetch fills that allocated a cache block"),
+      ADD_STAT(pfFillEvictedDemand, statistics::units::Count::get(),
+               "pure hardware prefetch fills that displaced a demand-visible "
+               "block"),
+      ADD_STAT(pfPollutingFills, statistics::units::Count::get(),
+               "distinct prefetch fills that later caused a demand miss"),
+      ADD_STAT(pfPollutionMisses, statistics::units::Count::get(),
+               "demand misses attributed to prior prefetch displacement"),
+      ADD_STAT(pfPollutionMissLatency, statistics::units::Tick::get(),
+               "measured latency of pollution-attributed demand MSHR misses"),
+      ADD_STAT(pfPollutionLossEstimate, statistics::units::Tick::get(),
+               "estimated cache-hit-adjusted latency loss from pollution "
+               "misses"),
+      ADD_STAT(pfPollutionRate, statistics::units::Ratio::get(),
+               "fraction of allocating prefetch fills that became polluting"),
+      cmd(MemCmd::NUM_MEM_CMDS)
 {
     for (int idx = 0; idx < MemCmd::NUM_MEM_CMDS; ++idx)
         cmd[idx].reset(new CacheCmdStats(c, MemCmd(idx).toString()));
@@ -2568,6 +2692,18 @@ BaseCache::CacheStats::regStats()
 
     dataExpansions.flags(nozero | nonan);
     dataContractions.flags(nozero | nonan);
+    pfFillAllocations.flags(nozero | nonan);
+    pfFillEvictedDemand.flags(nozero | nonan);
+    pfPollutingFills.flags(nozero | nonan);
+    pfPollutionMisses.flags(nozero | nonan);
+    pfPollutionMissLatency.flags(nozero | nonan);
+    pfPollutionLossEstimate.flags(nozero | nonan);
+    pfPollutionLossEstimate =
+        pfPollutionMissLatency -
+        pfPollutionMisses *
+            statistics::constant(cache.cyclesToTicks(cache.lookupLatency));
+    pfPollutionRate.flags(total | nozero | nonan);
+    pfPollutionRate = pfPollutingFills / pfFillAllocations;
 }
 
 void

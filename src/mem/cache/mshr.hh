@@ -118,6 +118,15 @@ class MSHR : public QueueEntry, public Printable
     /** Did we snoop a read while waiting for data? */
     bool postDowngrade;
 
+    struct PrefetchPollutionInfo
+    {
+        bool valid = false;
+        uint64_t prefetchId = 0;
+        Tick evictTick = 0;
+    };
+
+    PrefetchPollutionInfo prefetchPollution;
+
   public:
 
     /** Track if we sent this as a whole line write or not */
@@ -348,6 +357,35 @@ class MSHR : public QueueEntry, public Printable
      */
     bool hasFromCache() const {
         return targets.hasFromCache;
+    }
+
+    bool hasOnlyPrefetchTargets() const;
+
+    bool
+    hasPrefetchPollution() const
+    {
+        return prefetchPollution.valid;
+    }
+
+    uint64_t
+    getPrefetchPollutionId() const
+    {
+        assert(prefetchPollution.valid);
+        return prefetchPollution.prefetchId;
+    }
+
+    void
+    setPrefetchPollution(uint64_t prefetch_id, Tick evict_tick)
+    {
+        prefetchPollution.valid = true;
+        prefetchPollution.prefetchId = prefetch_id;
+        prefetchPollution.evictTick = evict_tick;
+    }
+
+    void
+    clearPrefetchPollution()
+    {
+        prefetchPollution = PrefetchPollutionInfo();
     }
 
     /**
