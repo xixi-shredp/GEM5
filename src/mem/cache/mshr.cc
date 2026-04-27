@@ -46,6 +46,7 @@
 
 #include "mem/cache/mshr.hh"
 
+#include <algorithm>
 #include <cassert>
 #include <string>
 
@@ -326,6 +327,7 @@ MSHR::allocate(Addr blk_addr, unsigned blk_size, PacketPtr target,
     ipopTimestamp = curTick();
     ipopPrefetcherIdBits = 0;
     ipopAccessDram = false;
+    clearPrefetchPollution();
 
     targets.init(blkAddr, blkSize);
     deferredTargets.init(blkAddr, blkSize);
@@ -356,6 +358,18 @@ MSHR::allocate(Addr blk_addr, unsigned blk_size, PacketPtr target,
     assert(target->matchBlockAddr(targets.front().pkt, blkSize));
 }
 
+bool
+MSHR::hasOnlyPrefetchTargets() const
+{
+    if (targets.empty() || !deferredTargets.empty()) {
+        return false;
+    }
+
+    return std::all_of(targets.begin(), targets.end(),
+                       [](const Target &target) {
+                           return target.source == Target::FromPrefetcher;
+                       });
+}
 
 void
 MSHR::clearDownstreamPending()
@@ -395,6 +409,7 @@ MSHR::deallocate()
     targets.resetFlags();
     assert(deferredTargets.isReset());
     inService = false;
+    clearPrefetchPollution();
 }
 
 /*
