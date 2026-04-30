@@ -37,10 +37,11 @@ SimObject('Prefetcher.py', sim_objects=[
     'DeltaCorrelatingPredictionTables', 'DCPTPrefetcher',
     'IrregularStreamBufferPrefetcher', 'SlimAMPMPrefetcher',
     'BOPPrefetcher', 'SBOOEPrefetcher', 'STeMSPrefetcher', 'PIFPrefetcher',
-    'FetchDirectedPrefetcher'
+    'FetchDirectedPrefetcher', 'AMDRegionTypePrefetcher'
     ])
 
 Source('access_map_pattern_matching.cc')
+Source('amd_region_type.cc')
 Source('base.cc')
 Source('multi.cc')
 Source('bop.cc')
