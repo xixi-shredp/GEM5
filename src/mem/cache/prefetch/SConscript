@@ -31,13 +31,15 @@ Import('*')
 SimObject('Prefetcher.py', sim_objects=[
     'BasePrefetcher', 'MultiPrefetcher', 'QueuedPrefetcher',
     'StridePrefetcherHashedSetAssociative', 'StridePrefetcher',
+    'AMDContiguousStreamPrefetcher',
     'SmsPrefetcher', 'TaggedPrefetcher', 'IndirectMemoryPrefetcher',
     'SignaturePathPrefetcher', 'SignaturePathPrefetcherV2',
     'AccessMapPatternMatching', 'AMPMPrefetcher',
     'DeltaCorrelatingPredictionTables', 'DCPTPrefetcher',
     'IrregularStreamBufferPrefetcher', 'SlimAMPMPrefetcher',
     'BOPPrefetcher', 'SBOOEPrefetcher', 'STeMSPrefetcher', 'PIFPrefetcher',
-    'FetchDirectedPrefetcher'
+    'FetchDirectedPrefetcher', 'AMDRIPRegionPrefetcher',
+    'AMDRegionStreamPrefetchers'
     ])
 
 Source('access_map_pattern_matching.cc')
@@ -51,6 +53,9 @@ Source('pif.cc')
 Source('queued.cc')
 Source('sbooe.cc')
 Source('sms.cc')
+Source('amd_contiguous_stream.cc')
+Source('amd_rip_region.cc')
+Source('amd_region_stream.cc')
 Source('signature_path.cc')
 Source('signature_path_v2.cc')
 Source('slim_ampm.cc')
