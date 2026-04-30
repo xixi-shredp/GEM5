@@ -8,6 +8,7 @@
 #include "base/cprintf.hh"
 #include "base/logging.hh"
 #include "base/trace.hh"
+#include "sim/system.hh"
 
 namespace gem5
 {
@@ -118,6 +119,7 @@ IdealCache::MemSidePort::recvRangeChange()
 IdealCache::IdealCache(const IdealCacheParams &params)
     : ClockedObject(params),
       memPort(params.name + ".mem_side", this),
+      system(params.system),
       hitLatency(params.hit_latency),
       releaseEvent([this] { completeAccess(); }, name())
 {
@@ -192,7 +194,7 @@ void
 IdealCache::performIdealAccess(PacketPtr pkt)
 {
     if (idealCacheNeedsAtomicAccess(pkt)) {
-        memPort.sendAtomic(pkt);
+        system->getPhysMem().access(pkt);
     } else {
         memPort.sendFunctional(pkt);
     }

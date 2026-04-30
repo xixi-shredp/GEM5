@@ -16,6 +16,8 @@
 namespace gem5
 {
 
+class System;
+
 bool idealCacheNeedsAtomicAccess(const PacketPtr pkt);
 
 class IdealCache : public ClockedObject
@@ -66,6 +68,7 @@ class IdealCache : public ClockedObject
 
     std::vector<CPUSidePort> cpuPorts;
     MemSidePort memPort;
+    System *const system;
 
     const Tick hitLatency;
 
