@@ -75,12 +75,10 @@ InfiniteTags::findBlockBySetAndWay(int set, int way) const
         return nullptr;
     }
 
-    int current_way = 0;
     for (CacheBlk &blk : const_cast<std::list<CacheBlk> &>(blocks)) {
-        if (current_way == way) {
+        if (blk.getWay() == static_cast<uint32_t>(way)) {
             return &blk;
         }
-        ++current_way;
     }
 
     return nullptr;
@@ -91,33 +89,46 @@ InfiniteTags::findVictim(const CacheBlk::KeyType &key, const std::size_t size,
                          std::vector<CacheBlk *> &evict_blks,
                          const uint64_t partition_id)
 {
-    for (CacheBlk &blk : blocks) {
-        if (!blk.isValid()) {
-            return &blk;
+    for (auto it = blocks.begin(); it != blocks.end(); ++it) {
+        if (!it->isValid()) {
+            if (it != blocks.begin()) {
+                blocks.splice(blocks.begin(), blocks, it);
+            }
+            return &blocks.front();
         }
     }
 
-    blocks.emplace_back();
-    CacheBlk &blk = blocks.back();
+    blocks.emplace_front();
+    CacheBlk &blk = blocks.front();
     blk.setPosition(0, blocks.size() - 1);
     registerBlock(blk);
     attachBlockData(blk);
-    return &blocks.back();
+    return &blocks.front();
 }
 
 CacheBlk *
 InfiniteTags::accessBlock(const PacketPtr pkt, Cycles &lat)
 {
-    CacheBlk *blk = findBlock({pkt->getAddr(), pkt->isSecure()});
+    const CacheBlk::KeyType key{pkt->getAddr(), pkt->isSecure()};
+    uint64_t probes = 0;
 
-    stats.tagAccesses += blocks.size();
-    if (blk != nullptr) {
-        stats.dataAccesses += 1;
-        blk->increaseRefCount();
+    for (auto it = blocks.begin(); it != blocks.end(); ++it) {
+        ++probes;
+        if (it->match(key)) {
+            stats.tagAccesses += probes;
+            stats.dataAccesses += 1;
+            it->increaseRefCount();
+            if (it != blocks.begin()) {
+                blocks.splice(blocks.begin(), blocks, it);
+            }
+            lat = lookupLatency;
+            return &blocks.front();
+        }
     }
 
+    stats.tagAccesses += probes;
     lat = lookupLatency;
-    return blk;
+    return nullptr;
 }
 
 Addr
