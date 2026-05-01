@@ -176,6 +176,14 @@ class Cache(BaseCache):
     cxx_class = "gem5::Cache"
 
 
+class InfCache(Cache):
+    type = "InfCache"
+    cxx_header = "mem/cache/inf_cache.hh"
+    cxx_class = "gem5::InfCache"
+
+    tags = InfiniteTags()
+
+
 class NoncoherentCache(BaseCache):
     type = "NoncoherentCache"
     cxx_header = "mem/cache/noncoherent_cache.hh"
