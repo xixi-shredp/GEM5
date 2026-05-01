@@ -364,6 +364,20 @@ class CPU : public BaseCPU
     /** Function to tell the CPU that an instruction has completed. */
     void instDone(ThreadID tid, const DynInstPtr &inst);
 
+    /** Records top-down frontend bubbles measured at the dispatch boundary. */
+    void recordFrontendBubbles(unsigned unusedSlots, unsigned slotWidth,
+                               bool fullFrontendWindow);
+
+    /** Records unused issue slots during bad-speculation recovery. */
+    void recordRecoveryBubbles(unsigned unusedSlots);
+    void recordRecoveryBubbles(unsigned unusedSlots, unsigned branchSlots);
+
+    /** Records unused issue slots occupied by bad speculation bubbles. */
+    void recordBadSpecBubbles(unsigned unusedSlots, unsigned branchSlots);
+
+    /** Records first-issued wrong-path slots by squash source. */
+    void recordBadSpecWrongPathIssue(bool fromBranch);
+
     /** Remove an instruction from the front end of the list.  There's
      *  no restriction on location of the instruction.
      */
@@ -478,6 +492,8 @@ class CPU : public BaseCPU
         CommitIdx,
         NumStages
     };
+
+    StallSignals stallSignals;
 
     /** The main time buffer to do backwards communication. */
     TimeBuffer<TimeStruct> timeBuffer;
@@ -614,74 +630,76 @@ class CPU : public BaseCPU
          * quiesce operation or waiting for an interrupt. */
         statistics::Scalar quiesceCycles;
     } cpuStats;
-    
+
     struct TopDownStats : public statistics::Group
     {
         TopDownStats(CPU *cpu);
 
         // intel top down stats
         /** Base retiring */
-        statistics::Formula baseRetiring;
+        statistics::Value baseRetiring;
         /** Frontend Bound */
-        statistics::Formula frontendBound;
+        statistics::Value frontendBound;
         /** Frontend Latency Bound */
-        statistics::Formula frontendLatencyBound;
+        statistics::Value frontendLatencyBound;
         /** Frontend Bandwidth Bound */
-        statistics::Formula frontendBandwidthBound;
+        statistics::Value frontendBandwidthBound;
         /** BadSpec Bound */
-        statistics::Formula badSpecBound;
+        statistics::Value badSpecBound;
         /** Branch Miss Prediction Bound */
-        statistics::Formula branchMissPrediction;
+        statistics::Value branchMissPrediction;
         /** Machine clears */
-        statistics::Formula machineClears;
+        statistics::Value machineClears;
         /** Backend Bound */
-        statistics::Formula backendBound;
+        statistics::Value backendBound;
+        /** Level1 overcount before backend clamp */
+        statistics::Value l1Overcount;
         /** Core Bound */
-        statistics::Formula coreBound;
+        statistics::Value coreBound;
         /** Memory Bound */
-        statistics::Formula memoryBound;
+        statistics::Value memoryBound;
         /** L1 Bound */
-        statistics::Formula l1Bound;
+        statistics::Value l1Bound;
         /** L1 Bound: Scalar */
-        statistics::Formula l1sBound;
+        statistics::Value l1sBound;
         /** L1 Bound: VectorUnitStride */
-        statistics::Formula l1vusBound;
+        statistics::Value l1vusBound;
         /** L1 Bound: VectorStrided */
-        statistics::Formula l1vsBound;
+        statistics::Value l1vsBound;
         /** L1 Bound: VectorIndexed */
-        statistics::Formula l1viBound;
+        statistics::Value l1viBound;
         /** L2 Bound */
-        statistics::Formula l2Bound;
+        statistics::Value l2Bound;
         /** L2 Bound: Scalar */
-        statistics::Formula l2sBound;
+        statistics::Value l2sBound;
         /** L2 Bound: VectorUnitStride */
-        statistics::Formula l2vusBound;
+        statistics::Value l2vusBound;
         /** L2 Bound: VectorStrided */
-        statistics::Formula l2vsBound;
+        statistics::Value l2vsBound;
         /** L2 Bound: VectorIndexed */
-        statistics::Formula l2viBound;
+        statistics::Value l2viBound;
         /** L3 Bound */
-        statistics::Formula l3Bound;
+        statistics::Value l3Bound;
         /** L3 Bound: Scalar */
-        statistics::Formula l3sBound;
+        statistics::Value l3sBound;
         /** L3 Bound: VectorUnitStride */
-        statistics::Formula l3vusBound;
+        statistics::Value l3vusBound;
         /** L3 Bound: VectorStrided */
-        statistics::Formula l3vsBound;
+        statistics::Value l3vsBound;
         /** L3 Bound: VectorIndexed */
-        statistics::Formula l3viBound;
+        statistics::Value l3viBound;
         /** Mem Bound */
-        statistics::Formula memBound;
+        statistics::Value memBound;
         /** Mem Bound: Scalar */
-        statistics::Formula memsBound;
+        statistics::Value memsBound;
         /** Mem Bound: VectorUnitStride */
-        statistics::Formula memvusBound;
+        statistics::Value memvusBound;
         /** Mem Bound: VectorStrided */
-        statistics::Formula memvsBound;
+        statistics::Value memvsBound;
         /** Mem Bound: VectorIndexed */
-        statistics::Formula memviBound;
+        statistics::Value memviBound;
         /** store Bound */
-        statistics::Formula storeBound;
+        statistics::Value storeBound;
     } topDownStats;
   public:
     // hardware transactional memory

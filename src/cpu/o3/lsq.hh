@@ -291,6 +291,8 @@ class LSQ
 
       protected:
         LSQUnit* lsqUnit() { return &_port; }
+        void trackInflightLoad();
+        void untrackInflightLoad();
         LSQRequest(LSQUnit* port, const DynInstPtr& inst, bool isLoad);
         LSQRequest(LSQUnit* port, const DynInstPtr& inst, bool isLoad,
                 const Addr& addr, const uint32_t& size,
@@ -329,6 +331,7 @@ class LSQ
         release(Flag reason)
         {
             assert(reason == Flag::LSQEntryFreed || reason == Flag::Discarded);
+            untrackInflightLoad();
             if (!isAnyOutstandingRequest()) {
                 delete this;
             } else {
@@ -689,7 +692,7 @@ class LSQ
         virtual PacketPtr mainPacket();
         virtual std::string name() const { return "SplitDataRequest"; }
     };
-    
+
     /** Constructs an LSQ with the given parameters. */
     LSQ(CPU *cpu_ptr, IEW *iew_ptr, const BaseO3CPUParams &params);
 

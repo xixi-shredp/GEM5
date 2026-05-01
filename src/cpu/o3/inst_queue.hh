@@ -309,6 +309,10 @@ class InstructionQueue
         addToProducers(inst);
     }
 
+    /** Records a uop that bypasses the IQ but still retires architecturally.
+     */
+    void recordBypassIssue(const DynInstPtr &inst);
+
     /** Process FU completion event. */
     void processFUCompletion(const DynInstPtr &inst, FUPool *fu_pool,
                              int fu_idx);
@@ -369,6 +373,9 @@ class InstructionQueue
 
     /** Returns the number of used entries for a thread. */
     unsigned getCount(ThreadID tid) const;
+
+    /** Returns true when the IQ still has instructions waiting to issue. */
+    bool hasInFlightInsts() const;
 
     /** Debug function to print all instructions. */
     void printInsts();
@@ -507,6 +514,9 @@ class InstructionQueue
     /** Number of Total Threads*/
     ThreadID numThreads;
 
+    /** Active threads list. */
+    std::list<ThreadID> *activeThreads;
+
     /** The total number of instructions that can be issued in one cycle. */
     unsigned totalWidth;
 
@@ -561,6 +571,7 @@ class InstructionQueue
         statistics::Scalar nonSpecInstsAdded;
 
         statistics::Scalar instsIssued;
+        statistics::Scalar instsFirstIssued;
         /** Stat for number of integer instructions issued. */
         statistics::Scalar intInstsIssued;
         /** Stat for number of floating point instructions issued. */
@@ -616,6 +627,12 @@ class InstructionQueue
     } iqStats;
 
    public:
+     const IQStats &
+     getIQStats() const
+     {
+         return iqStats;
+     }
+
     struct IQIOStats : public statistics::Group
     {
         IQIOStats(statistics::Group *parent);
@@ -633,8 +650,7 @@ class InstructionQueue
         statistics::Scalar fpAluAccesses;
         statistics::Scalar vecAluAccesses;
     } iqIOStats;
-    
-    
+
     struct BackendBoundStats : public statistics::Group
     {
         BackendBoundStats(statistics::Group* parent);

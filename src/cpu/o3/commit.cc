@@ -109,6 +109,7 @@ Commit::Commit(CPU *_cpu, const BaseO3CPUParams &params)
       renameToROBDelay(params.renameToROBDelay),
       fetchToCommitDelay(params.commitToFetchDelay),
       renameWidth(params.renameWidth),
+      issueWidth(params.issueWidth),
       commitWidth(params.commitWidth),
       numThreads(params.numThreads),
       drainPending(false),
@@ -148,6 +149,8 @@ Commit::Commit(CPU *_cpu, const BaseO3CPUParams &params)
         renameMap[tid] = nullptr;
         htmStarts[tid] = 0;
         htmStops[tid] = 0;
+        badSpecRecovery[tid] = false;
+        badSpecRecoveryFromBranch[tid] = false;
     }
     interrupt = NoFault;
 }
@@ -187,8 +190,26 @@ Commit::CommitStats::CommitStats(CPU *cpu, Commit *commit)
       ADD_STAT(commitEligibleSamples, statistics::units::Cycle::get(),
                "number cycles where commit BW limit reached"),
       ADD_STAT(recoveryBubbles, statistics::units::Count::get(),
-               "Unutilized issue-pipeline slots" 
+               "Unutilized issue-pipeline slots"
                "due to recovery from earlier miss-speculation"),
+      ADD_STAT(branchRecoveryBubbles, statistics::units::Count::get(),
+               "Unutilized issue-pipeline slots due to branch recovery"),
+      ADD_STAT(
+          machineClearRecoveryBubbles, statistics::units::Count::get(),
+          "Unutilized issue-pipeline slots due to machine clear recovery"),
+      ADD_STAT(
+          badSpecNonIssueBubbles, statistics::units::Count::get(),
+          "Unutilized issue-pipeline slots due to non-issued bad speculation"),
+      ADD_STAT(branchBadSpecNonIssueBubbles, statistics::units::Count::get(),
+               "Non-issued bad speculation slots due to branches"),
+      ADD_STAT(machineClearBadSpecNonIssueBubbles,
+               statistics::units::Count::get(),
+               "Non-issued bad speculation slots due to machine clears"),
+      ADD_STAT(branchWrongPathFirstIssued, statistics::units::Count::get(),
+               "First-issued wrong-path slots due to branch misprediction"),
+      ADD_STAT(machineClearWrongPathFirstIssued,
+               statistics::units::Count::get(),
+               "First-issued wrong-path slots due to machine clears"),
       ADD_STAT(squashDueToBranch, statistics::units::Count::get(),
                "Number of squash due to branch"),
       ADD_STAT(squashDueToOrderViolation, statistics::units::Count::get(),
@@ -212,6 +233,15 @@ Commit::CommitStats::CommitStats(CPU *cpu, Commit *commit)
     commitSquashedInsts.prereq(commitSquashedInsts);
     commitNonSpecStalls.prereq(commitNonSpecStalls);
     branchMispredicts.prereq(branchMispredicts);
+    recoveryBubbles.prereq(recoveryBubbles);
+    branchRecoveryBubbles.prereq(branchRecoveryBubbles);
+    machineClearRecoveryBubbles.prereq(machineClearRecoveryBubbles);
+    badSpecNonIssueBubbles.prereq(badSpecNonIssueBubbles);
+    branchBadSpecNonIssueBubbles.prereq(branchBadSpecNonIssueBubbles);
+    machineClearBadSpecNonIssueBubbles.prereq(
+        machineClearBadSpecNonIssueBubbles);
+    branchWrongPathFirstIssued.prereq(branchWrongPathFirstIssued);
+    machineClearWrongPathFirstIssued.prereq(machineClearWrongPathFirstIssued);
 
     numCommittedDist
         .init(0,commit->commitWidth,1)
@@ -230,7 +260,7 @@ Commit::CommitStats::CommitStats(CPU *cpu, Commit *commit)
         .flags(total | pdf | dist);
 
     committedInstType.ysubnames(enums::OpClassStrings);
-    
+
     totalSquash = squashDueToBranch + squashDueToOrderViolation + \
         squashDueToTrap + squashDueToTC + squashDueToSquashAfter;
 }
@@ -334,6 +364,8 @@ Commit::clearStates(ThreadID tid)
     pc[tid].reset(cpu->tcBase(tid)->getIsaPtr()->newPCState());
     lastCommitedSeqNum[tid] = 0;
     squashAfterInst[tid] = NULL;
+    badSpecRecovery[tid] = false;
+    badSpecRecoveryFromBranch[tid] = false;
 
     // Clear out any of this thread's instructions being sent to prior stages.
     for (int i = -cpu->timeBuffer.getPast(); i <= cpu->timeBuffer.getFuture();
@@ -404,6 +436,8 @@ Commit::takeOverFrom()
         trapSquash[tid] = false;
         tcSquash[tid] = false;
         squashAfterInst[tid] = NULL;
+        badSpecRecovery[tid] = false;
+        badSpecRecoveryFromBranch[tid] = false;
     }
     rob->takeOverFrom();
 }
@@ -532,7 +566,7 @@ Commit::squashAll(ThreadID tid)
     // Hopefully nothing breaks.)
     youngestSeqNum[tid] = lastCommitedSeqNum[tid];
 
-    rob->squash(squashed_inst, tid);
+    rob->squash(squashed_inst, tid, false);
     changedROBNumEntries[tid] = true;
 
     // Send back the sequence number of the squashed instruction.
@@ -565,6 +599,10 @@ Commit::squashFromTrap(ThreadID tid)
     toIEW->commitInfo[tid].trapPending = false;
 
     trapSquash[tid] = false;
+    badSpecRecovery[tid] = true;
+    badSpecRecoveryFromBranch[tid] = false;
+    toIEW->commitInfo[tid].mispredRecovery = true;
+    toIEW->commitInfo[tid].mispredRecoveryBranch = false;
 
     commitStatus[tid] = ROBSquashing;
     stats.squashDueToTrap++;
@@ -582,6 +620,10 @@ Commit::squashFromTC(ThreadID tid)
     assert(!thread[tid]->trapPending);
 
     commitStatus[tid] = ROBSquashing;
+    badSpecRecovery[tid] = true;
+    badSpecRecoveryFromBranch[tid] = false;
+    toIEW->commitInfo[tid].mispredRecovery = true;
+    toIEW->commitInfo[tid].mispredRecoveryBranch = false;
     stats.squashDueToTC++;
     cpu->activityThisCycle();
 
@@ -602,6 +644,10 @@ Commit::squashFromSquashAfter(ThreadID tid)
     squashAfterInst[tid] = NULL;
 
     commitStatus[tid] = ROBSquashing;
+    badSpecRecovery[tid] = true;
+    badSpecRecoveryFromBranch[tid] = false;
+    toIEW->commitInfo[tid].mispredRecovery = true;
+    toIEW->commitInfo[tid].mispredRecoveryBranch = false;
     stats.squashDueToSquashAfter++;
     cpu->activityThisCycle();
 }
@@ -637,6 +683,8 @@ Commit::tick()
 
             if (rob->isDoneSquashing(tid)) {
                 commitStatus[tid] = Running;
+                badSpecRecovery[tid] = false;
+                badSpecRecoveryFromBranch[tid] = false;
             } else {
                 DPRINTF(Commit,"[tid:%i] Still Squashing, cannot commit any"
                         " insts this cycle.\n", tid);
@@ -779,11 +827,20 @@ Commit::commit()
     int num_squashing_threads = 0;
     for (ThreadID tid : *activeThreads) {
         stats.status[commitStatus[tid]]++;
+        toIEW->commitInfo[tid].mispredRecovery = badSpecRecovery[tid];
+        toIEW->commitInfo[tid].mispredRecoveryBranch =
+            badSpecRecoveryFromBranch[tid];
+        if (stallSig) {
+            stallSig->blockIEW[tid] = false;
+            stallSig->iewBlockReason[tid] = NoStall;
+        }
+        bool squash_handled = false;
         // Not sure which one takes priority.  I think if we have
         // both, that's a bad sign.
         if (trapSquash[tid]) {
             assert(!tcSquash[tid]);
             squashFromTrap(tid);
+            squash_handled = true;
 
             // If the thread is trying to exit (i.e., an exit syscall was
             // executed), this trapSquash was originated by the exit
@@ -794,17 +851,19 @@ Commit::commit()
         } else if (tcSquash[tid]) {
             assert(commitStatus[tid] != TrapPending);
             squashFromTC(tid);
+            squash_handled = true;
         } else if (commitStatus[tid] == SquashAfterPending) {
             // A squash from the previous cycle of the commit stage (i.e.,
             // commitInsts() called squashAfter) is pending. Squash the
             // thread now.
             squashFromSquashAfter(tid);
+            squash_handled = true;
         }
 
         // Squashed sequence number must be older than youngest valid
         // instruction in the ROB. This prevents squashes from younger
         // instructions overriding squashes from older instructions.
-        if (fromIEW->squash[tid] &&
+        if (!squash_handled && fromIEW->squash[tid] &&
             commitStatus[tid] != TrapPending &&
             fromIEW->squashedSeqNum[tid] <= youngestSeqNum[tid]) {
 
@@ -827,6 +886,12 @@ Commit::commit()
                     tid, *fromIEW->pc[tid]);
 
             commitStatus[tid] = ROBSquashing;
+            badSpecRecovery[tid] = true;
+            badSpecRecoveryFromBranch[tid] =
+                fromIEW->mispredictInst[tid] ? true : false;
+            toIEW->commitInfo[tid].mispredRecovery = true;
+            toIEW->commitInfo[tid].mispredRecoveryBranch =
+                badSpecRecoveryFromBranch[tid];
 
             // If we want to include the squashing instruction in the squash,
             // then use one older sequence number.
@@ -840,7 +905,8 @@ Commit::commit()
             // number as the youngest instruction in the ROB.
             youngestSeqNum[tid] = squashed_inst;
 
-            rob->squash(squashed_inst, tid);
+            rob->squash(squashed_inst, tid,
+                        fromIEW->mispredictInst[tid] ? true : false);
             changedROBNumEntries[tid] = true;
 
             toIEW->commitInfo[tid].doneSeqNum = squashed_inst;
@@ -870,6 +936,14 @@ Commit::commit()
         if (commitStatus[tid] == ROBSquashing) {
             num_squashing_threads++;
         }
+
+        if (stallSig && (commitStatus[tid] == ROBSquashing ||
+                         commitStatus[tid] == TrapPending ||
+                         commitStatus[tid] == FetchTrapPending)) {
+            stallSig->blockIEW[tid] = true;
+            stallSig->iewBlockReason[tid] =
+                commitStatus[tid] == ROBSquashing ? CommitSquash : TrapStall;
+        }
     }
 
     // If commit is currently squashing, then it will have activity for the
@@ -878,7 +952,7 @@ Commit::commit()
         _nextStatus = Active;
     }
 
-    if (num_squashing_threads != numThreads) {
+    if (num_squashing_threads != activeThreads->size()) {
         // If we're not currently squashing, then get instructions.
         getInsts();
 
@@ -1012,17 +1086,6 @@ Commit::commitInsts()
                     ->committedInstType[head_inst->opClass()]++;
                 stats.committedInstType[tid][head_inst->opClass()]++;
                 ppCommit->notify(head_inst);
-                
-                
-                if (lastMispred) {
-                    lastMispred = false;
-                    stats.recoveryBubbles +=
-                        (cpu->curCycle() - lastCommitCycle) * renameWidth;
-                }
-                if (head_inst->mispredicted()) {
-                    lastMispred = true;
-                }
-                lastCommitCycle = cpu->curCycle();
 
                 // hardware transactional memory
 

@@ -156,6 +156,8 @@ Fetch::Fetch(CPU *_cpu, const BaseO3CPUParams &params)
         fatal("Decoupled front-end was not tested with multiple threads.");
     }
 
+    stallReason.resize(decodeWidth, NoStall);
+
     for (int i = 0; i < MaxThreads; i++) {
         fetchStatus[i] = Idle;
         decoder[i] = nullptr;
@@ -523,6 +525,7 @@ Fetch::ftqReady(ThreadID tid, bool &status_change)
     // Need at least two cycles for now.
     if (!ftq->isHeadReady(tid)) {
         fetchStatus[tid] = FtqWait;
+        setAllFetchStalls(FTQBubble);
         status_change = true;
         return false;
     }
@@ -541,6 +544,7 @@ Fetch::fetchCacheLine(Addr vaddr, ThreadID tid, Addr pc)
     if (cacheBlocked) {
         DPRINTF(Fetch, "[tid:%i] Can't fetch cache line, cache blocked\n",
                 tid);
+        setAllFetchStalls(IcacheStall);
         return false;
     } else if (checkInterrupt(pc) && !delayedCommit[tid]) {
         // Hold off fetch from getting new instructions when:
@@ -549,6 +553,7 @@ Fetch::fetchCacheLine(Addr vaddr, ThreadID tid, Addr pc)
         // fetch is switched out.
         DPRINTF(Fetch, "[tid:%i] Can't fetch cache line, interrupt pending\n",
                 tid);
+        setAllFetchStalls(IntStall);
         return false;
     }
 
@@ -572,6 +577,7 @@ Fetch::fetchCacheLine(Addr vaddr, ThreadID tid, Addr pc)
 
     // Initiate translation of the icache block
     fetchStatus[tid] = ItlbWait;
+    setAllFetchStalls(ITlbStall);
     FetchTranslation *trans = new FetchTranslation(this);
     cpu->mmu->translateTiming(mem_req, cpu->thread[tid]->getTC(),
                               trans, BaseMMU::Execute);
@@ -607,6 +613,7 @@ Fetch::finishTranslation(const Fault &fault, const RequestPtr &mem_req)
             warn("Address %#x is outside of physical memory, stopping fetch\n",
                     mem_req->getPaddr());
             fetchStatus[tid] = NoGoodAddr;
+            setAllFetchStalls(OtherFetchStall);
             memReq[tid] = NULL;
             return;
         }
@@ -628,6 +635,7 @@ Fetch::finishTranslation(const Fault &fault, const RequestPtr &mem_req)
             DPRINTF(Fetch, "[tid:%i] Out of MSHRs!\n", tid);
 
             fetchStatus[tid] = IcacheWaitRetry;
+            setAllFetchStalls(IcacheStall);
             retryPkt = data_pkt;
             retryTid = tid;
             cacheBlocked = true;
@@ -637,6 +645,7 @@ Fetch::finishTranslation(const Fault &fault, const RequestPtr &mem_req)
                     "response.\n", tid);
             lastIcacheStall[tid] = curTick();
             fetchStatus[tid] = IcacheWaitResponse;
+            setAllFetchStalls(IcacheStall);
             // Notify Fetch Request probe when a packet containing a fetch
             // request is successfully sent
             ppFetchRequestSent->notify(mem_req);
@@ -677,6 +686,7 @@ Fetch::finishTranslation(const Fault &fault, const RequestPtr &mem_req)
         cpu->activityThisCycle();
 
         fetchStatus[tid] = TrapPending;
+        setAllFetchStalls(TrapStall);
 
         DPRINTF(Fetch, "[tid:%i] Blocked, need to handle the trap.\n", tid);
         DPRINTF(Fetch, "[tid:%i] fault (%s) detected @ PC %s.\n",
@@ -748,6 +758,7 @@ Fetch::doSquash(const PCStateBase &new_pc, const DynInstPtr squashInst,
     }
 
     fetchStatus[tid] = Squashing;
+    setAllFetchStalls(BpStall);
 
     // Empty fetch queue
     fetchQueue[tid].clear();
@@ -827,6 +838,7 @@ Fetch::tick()
     bool status_change = false;
 
     wroteToTimeBuffer = false;
+    setAllFetchStalls(NoStall);
 
     for (ThreadID i = 0; i < numThreads; ++i) {
         issuePipelinedIfetch[i] = false;
@@ -883,34 +895,37 @@ Fetch::tick()
         }
     }
 
-    // Pick a random thread to start trying to grab instructions from
-    auto tid_itr = activeThreads->begin();
-    std::advance(tid_itr,
-            rng->random<uint8_t>(0, activeThreads->size() - 1));
+    if (!activeThreads->empty()) {
+        // Pick a random thread to start trying to grab instructions from
+        auto tid_itr = activeThreads->begin();
+        std::advance(tid_itr,
+                     rng->random<uint8_t>(0, activeThreads->size() - 1));
 
-    while (available_insts != 0 && insts_to_decode < decodeWidth) {
-        ThreadID tid = *tid_itr;
-        if (!stalls[tid].decode && !fetchQueue[tid].empty()) {
-            const auto& inst = fetchQueue[tid].front();
-            toDecode->insts[toDecode->size++] = inst;
-            DPRINTF(Fetch, "[tid:%i] [sn:%llu] Sending instruction to decode "
-                    "from fetch queue. Fetch queue size: %i.\n",
-                    tid, inst->seqNum, fetchQueue[tid].size());
+        while (available_insts != 0 && insts_to_decode < decodeWidth) {
+            ThreadID tid = *tid_itr;
+            if (!stalls[tid].decode && !fetchQueue[tid].empty()) {
+                const auto &inst = fetchQueue[tid].front();
+                toDecode->insts[toDecode->size++] = inst;
+                DPRINTF(Fetch,
+                        "[tid:%i] [sn:%llu] Sending instruction to decode "
+                        "from fetch queue. Fetch queue size: %i.\n",
+                        tid, inst->seqNum, fetchQueue[tid].size());
 
-            wroteToTimeBuffer = true;
-            fetchQueue[tid].pop_front();
-            insts_to_decode++;
-            available_insts--;
+                wroteToTimeBuffer = true;
+                fetchQueue[tid].pop_front();
+                insts_to_decode++;
+                available_insts--;
+            }
+
+            tid_itr++;
+            // Wrap around if at end of active threads list
+            if (tid_itr == activeThreads->end()) {
+                tid_itr = activeThreads->begin();
+            }
         }
-
-        tid_itr++;
-        // Wrap around if at end of active threads list
-        if (tid_itr == activeThreads->end())
-            tid_itr = activeThreads->begin();
     }
 
-    // Intel TopDown method for measuring frontend bubbles
-    measureFrontendBubbles(insts_to_decode, *tid_itr);
+    updateStallReasons(insts_to_decode);
 
     // If there was activity this cycle, inform the CPU of it.
     if (wroteToTimeBuffer) {
@@ -922,27 +937,73 @@ Fetch::tick()
     numInst = 0;
 }
 
-
 void
-Fetch::measureFrontendBubbles(unsigned insts_to_decode, ThreadID tid)
+Fetch::setAllFetchStalls(StallReason stall)
 {
-    // Intel TopDown method for measuring frontend bubbles
-    // Count unutilized issue slots when backend is not stalled (decode not stalled)
-    // For N-wide machine, if frontend supplies 0 instructions:
-    // - fetchBubbles += N (count total empty slots)
-    // - fetchBubbles_max += 1 (count occurrence of all slots being empty)
-    if (!stalls[tid].decode && !fromCommit->commitInfo[tid].robSquashing) {
-        // backend not stalled
-        int unused_slots = decodeWidth - insts_to_decode;
-        if (unused_slots > 0) {
-            // has empty slots
-            fetchStats.fetchBubbles += unused_slots; // add number of empty slots
-            if (unused_slots == decodeWidth) {
-                // all slots empty, insts_to_decode == 0
-                fetchStats.fetchBubbles_max++; // count max bubble occurrence
-            }
+    for (auto &reason : stallReason) {
+        reason = stall;
+    }
+}
+
+bool
+Fetch::hasAnyFetchStallReason() const
+{
+    for (StallReason reason : stallReason) {
+        if (reason != NoStall) {
+            return true;
         }
     }
+    return false;
+}
+
+void
+Fetch::updateStallReasons(unsigned insts_to_decode)
+{
+    StallReason block_reason = NoStall;
+    StallReason partial_reason = NoStall;
+    bool any_unblocked_thread = false;
+    bool any_blocked_thread = false;
+    auto firstActiveStallReason = [this](StallReason fallback) {
+        for (StallReason reason : stallReason) {
+            if (reason != NoStall) {
+                return reason;
+            }
+        }
+        return fallback;
+    };
+    for (ThreadID active_tid : *activeThreads) {
+        if (stallSig->blockFetch[active_tid]) {
+            any_blocked_thread = true;
+            StallReason reason = stallSig->fetchBlockReason[active_tid];
+            if (block_reason == NoStall) {
+                block_reason = reason == NoStall ? OtherStall : reason;
+            }
+        } else {
+            any_unblocked_thread = true;
+        }
+    }
+    if (block_reason != NoStall) {
+        partial_reason = block_reason;
+    } else {
+        partial_reason = firstActiveStallReason(NoStall);
+    }
+
+    if (any_blocked_thread && !any_unblocked_thread &&
+        block_reason != NoStall) {
+        setAllFetchStalls(block_reason);
+    } else if (insts_to_decode == 0) {
+        const StallReason fallback_reason =
+            partial_reason == NoStall ? OtherFetchStall : partial_reason;
+        setAllFetchStalls(firstActiveStallReason(fallback_reason));
+    } else {
+        partial_reason =
+            partial_reason == NoStall ? FetchFragStall : partial_reason;
+        for (size_t i = 0; i < stallReason.size(); ++i) {
+            stallReason[i] = i < insts_to_decode ? NoStall : partial_reason;
+        }
+    }
+
+    toDecode->fetchStallReason = stallReason;
 }
 
 bool
@@ -951,12 +1012,19 @@ Fetch::checkSignalsAndUpdate(ThreadID tid)
     // Update the per thread stall statuses.
     if (fromDecode->decodeBlock[tid]) {
         stalls[tid].decode = true;
+        stallSig->blockFetch[tid] = true;
+        stallSig->fetchBlockReason[tid] =
+            fromDecode->decodeInfo[tid].blockReason == NoStall
+                ? OtherStall
+                : fromDecode->decodeInfo[tid].blockReason;
     }
 
     if (fromDecode->decodeUnblock[tid]) {
         assert(stalls[tid].decode);
         assert(!fromDecode->decodeBlock[tid]);
         stalls[tid].decode = false;
+        stallSig->blockFetch[tid] = false;
+        stallSig->fetchBlockReason[tid] = NoStall;
     }
 
     // Check squash signals from commit.
@@ -1098,8 +1166,25 @@ Fetch::fetch(bool &status_change)
         // Breaks looping condition in tick()
         threadFetched = numFetchingThreads;
 
-        if (numThreads == 1) {  // @todo Per-thread stats
-            profileStall(0);
+        if (activeThreads->empty()) {
+            setAllFetchStalls(profileStall(0));
+        } else {
+            size_t stall_index = 0;
+            StallReason first_reason = OtherFetchStall;
+            bool have_reason = false;
+            for (ThreadID active_tid : *activeThreads) {
+                StallReason reason = profileStall(active_tid);
+                if (!have_reason) {
+                    first_reason = reason;
+                    have_reason = true;
+                }
+                if (stall_index < stallReason.size()) {
+                    stallReason[stall_index++] = reason;
+                }
+            }
+            while (stall_index < stallReason.size()) {
+                stallReason[stall_index++] = first_reason;
+            }
         }
 
         return;
@@ -1145,6 +1230,7 @@ Fetch::fetch(bool &status_change)
         DPRINTF(Fetch, "[tid:%i] Icache miss is complete.\n", tid);
 
         fetchStatus[tid] = Running;
+        setAllFetchStalls(NoStall);
         status_change = true;
     } else if (fetchStatus[tid] == Running) {
         // Align the fetch PC so its at the start of a fetch buffer segment.
@@ -1178,6 +1264,7 @@ Fetch::fetch(bool &status_change)
             // an delayed commit micro-op currently (delayed commit
             // instructions are not interruptable by interrupts, only faults)
             ++fetchStats.miscStallCycles;
+            setAllFetchStalls(IntStall);
             DPRINTF(Fetch, "[tid:%i] Fetch is stalled!\n", tid);
             return;
         }
@@ -1629,7 +1716,7 @@ Fetch::pipelineIcacheAccesses(ThreadID tid)
     }
 }
 
-void
+StallReason
 Fetch::profileStall(ThreadID tid)
 {
     DPRINTF(Fetch,"There are no more threads available to fetch from.\n");
@@ -1639,49 +1726,64 @@ Fetch::profileStall(ThreadID tid)
     if (stalls[tid].drain) {
         ++fetchStats.pendingDrainCycles;
         DPRINTF(Fetch, "Fetch is waiting for a drain!\n");
+        return OtherFetchStall;
     } else if (activeThreads->empty()) {
         ++fetchStats.noActiveThreadStallCycles;
         DPRINTF(Fetch, "Fetch has no active thread!\n");
+        return OtherFetchStall;
     } else if (fetchStatus[tid] == Blocked) {
         fetchStats.status[Blocked]++;
+        StallReason reason = stallSig->blockFetch[tid]
+                                 ? stallSig->fetchBlockReason[tid]
+                                 : OtherFetchStall;
         DPRINTF(Fetch, "[tid:%i] Fetch is blocked!\n", tid);
+        return reason == NoStall ? OtherFetchStall : reason;
     } else if (fetchStatus[tid] == Squashing) {
         fetchStats.status[Squashing]++;
         DPRINTF(Fetch, "[tid:%i] Fetch is squashing!\n", tid);
+        return SquashStall;
     } else if (fetchStatus[tid] == IcacheWaitResponse) {
         cpu->fetchStats[tid]->icacheStallCycles++;
         fetchStats.status[IcacheWaitResponse]++;
         DPRINTF(Fetch, "[tid:%i] Fetch is waiting cache response!\n",
                 tid);
+        return IcacheStall;
     } else if (fetchStatus[tid] == ItlbWait) {
         fetchStats.status[ItlbWait]++;
         DPRINTF(Fetch, "[tid:%i] Fetch is waiting ITLB walk to "
                 "finish!\n", tid);
+        return ITlbStall;
     } else if (fetchStatus[tid] == FtqWait) {
         fetchStats.status[FtqWait]++;
         DPRINTF(Fetch, "[tid:%i] Fetch is waiting for the BPU to fill FTQ!\n",
                 tid);
+        return FTQBubble;
     } else if (fetchStatus[tid] == TrapPending) {
         fetchStats.status[TrapPending]++;
         DPRINTF(Fetch, "[tid:%i] Fetch is waiting for a pending trap!\n",
                 tid);
+        return TrapStall;
     } else if (fetchStatus[tid] == QuiescePending) {
         fetchStats.status[QuiescePending]++;
         DPRINTF(Fetch, "[tid:%i] Fetch is waiting for a pending quiesce "
                 "instruction!\n", tid);
+        return OtherFetchStall;
     } else if (fetchStatus[tid] == IcacheWaitRetry) {
         fetchStats.status[IcacheWaitRetry]++;
         DPRINTF(Fetch, "[tid:%i] Fetch is waiting for an I-cache retry!\n",
                 tid);
+        return IcacheStall;
     } else if (fetchStatus[tid] == NoGoodAddr) {
         fetchStats.status[NoGoodAddr]++;
         DPRINTF(Fetch, "[tid:%i] Fetch predicted non-executable address\n",
                 tid);
+        return OtherFetchStall;
     } else {
         DPRINTF(Fetch, "[tid:%i] Unexpected fetch stall reason "
             "(Status: %i)\n",
             tid, fetchStatus[tid]);
     }
+    return OtherFetchStall;
 }
 
 bool

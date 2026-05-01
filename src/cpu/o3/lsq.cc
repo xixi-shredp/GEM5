@@ -757,42 +757,80 @@ static int MemboundTypeCodeWidth = 4;
 static inline int
 statLoadboundTypeCode(StaticInstPtr inst)
 {
-    int miss = 0;
-    if (inst->isVectorUnitStrideLoad())   { miss |= 1 << 1; }
-    else if (inst->isVectorStridedLoad()) { miss |= 1 << 2; }
-    else if (inst->isVectorIndexedLoad()) { miss |= 1 << 3; }
-    else { miss |= 1; } // Scalar
-    return miss;
+    if (inst->isVectorUnitStrideLoad()) {
+        return 1 << 1;
+    } else if (inst->isVectorStridedLoad()) {
+        return 1 << 2;
+    } else if (inst->isVectorIndexedLoad()) {
+        return 1 << 3;
+    }
+    return 1;
+}
+
+static inline void
+setOldestLoadboundType(int &code, InstSeqNum &oldestSeq, bool &valid,
+                       const DynInstPtr &inst)
+{
+    if (!valid || inst->seqNum < oldestSeq) {
+        code = statLoadboundTypeCode(inst->staticInst);
+        oldestSeq = inst->seqNum;
+        valid = true;
+    }
 }
 
 int
 LSQ::anyInflightLoadsNotComplete()
 {
     int l1miss = 0, l2miss = 0, l3miss = 0, any = 0;
-    for (auto it : thread.at(0).inflightLoads) {
-        if (it->isAnyOutstandingRequest()) {
-            auto inst = it->instruction()->staticInst;
-            if (it->mainReq()->depth == 1) {
-                l1miss |= statLoadboundTypeCode(inst);
+    int selected_type = 0;
+    InstSeqNum selected_seq = 0;
+    bool selected_valid = false;
+    DynInstPtr selected_inst = nullptr;
+    int selected_depth = 0;
+
+    for (ThreadID tid : *activeThreads) {
+        for (auto it : thread.at(tid).inflightLoads) {
+            if (it->isAnyOutstandingRequest()) {
+                auto inst = it->instruction();
+                const int depth = it->mainReq()->depth;
+                const bool update_selected =
+                    !selected_valid || inst->seqNum < selected_seq;
+                if (update_selected) {
+                    selected_inst = inst;
+                    selected_depth = depth;
+                }
+                setOldestLoadboundType(selected_type, selected_seq,
+                                       selected_valid, inst);
             }
-            if (it->mainReq()->depth == 2) {
-                l2miss |= statLoadboundTypeCode(inst) << MemboundTypeCodeWidth;
-            }
-            if (it->mainReq()->depth == 3) {
-                l3miss |= statLoadboundTypeCode(inst) << MemboundTypeCodeWidth * 2;
-            }
-            any |= statLoadboundTypeCode(inst) << MemboundTypeCodeWidth * 3;
         }
     }
-    return l1miss | l2miss | l3miss | any;
+
+    if (selected_inst) {
+        any = selected_type;
+        if (selected_depth >= 1) {
+            l1miss = selected_type;
+        }
+        if (selected_depth >= 2) {
+            l2miss = selected_type;
+        }
+        if (selected_depth >= 3) {
+            l3miss = selected_type;
+        }
+    }
+
+    return l1miss | (l2miss << MemboundTypeCodeWidth) |
+           (l3miss << MemboundTypeCodeWidth * 2) |
+           (any << MemboundTypeCodeWidth * 3);
 }
 
 bool
 LSQ::anyStoreNotExecute()
 {
-    for (auto& it : thread.at(0).storeQueue) {
-        if (!it.instruction()->isIssued()) {
-            return true;
+    for (ThreadID tid : *activeThreads) {
+        for (auto &it : thread.at(tid).storeQueue) {
+            if (!it.instruction()->isIssued()) {
+                return true;
+            }
         }
     }
     return false;
@@ -1159,6 +1197,7 @@ LSQ::LSQRequest::addReq(Addr addr, unsigned size,
 
 LSQ::LSQRequest::~LSQRequest()
 {
+    untrackInflightLoad();
     assert(!isAnyOutstandingRequest());
     _inst->savedRequest = nullptr;
 
@@ -1214,12 +1253,7 @@ bool
 LSQ::SingleDataRequest::recvTimingResp(PacketPtr pkt)
 {
 
-    if (isLoad()) {
-        auto it = std::find(lsqUnit()->inflightLoads.begin(), lsqUnit()->inflightLoads.end(), this);
-        if (it != lsqUnit()->inflightLoads.end()) {
-            lsqUnit()->inflightLoads.erase(it);
-        }
-    }
+    untrackInflightLoad();
     assert(_numOutstandingPackets == 1);
     flags.set(Flag::Complete);
     assert(pkt == _packets.front());
@@ -1237,12 +1271,7 @@ LSQ::SplitDataRequest::recvTimingResp(PacketPtr pkt)
     assert(pktIdx < _packets.size());
     numReceivedPackets++;
     if (numReceivedPackets == _packets.size()) {
-        if (isLoad()) {
-            auto it = std::find(lsqUnit()->inflightLoads.begin(), lsqUnit()->inflightLoads.end(), this);
-            if (it != lsqUnit()->inflightLoads.end()) {
-                lsqUnit()->inflightLoads.erase(it);
-            }
-        }
+        untrackInflightLoad();
         flags.set(Flag::Complete);
         /* Assemble packets. */
         PacketPtr resp = isLoad()
@@ -1358,15 +1387,41 @@ LSQ::SplitDataRequest::buildPackets()
 }
 
 void
+LSQ::LSQRequest::trackInflightLoad()
+{
+    if (!isLoad()) {
+        return;
+    }
+
+    auto &inflight = lsqUnit()->inflightLoads;
+    auto it = std::find(inflight.begin(), inflight.end(), this);
+    if (it == inflight.end()) {
+        assert(inflight.size() < lsqUnit()->numLoads() + 4);
+        inflight.emplace_back(this);
+    }
+}
+
+void
+LSQ::LSQRequest::untrackInflightLoad()
+{
+    if (!isLoad()) {
+        return;
+    }
+
+    auto &inflight = lsqUnit()->inflightLoads;
+    auto it = std::find(inflight.begin(), inflight.end(), this);
+    if (it != inflight.end()) {
+        inflight.erase(it);
+    }
+}
+
+void
 LSQ::SingleDataRequest::sendPacketToCache()
 {
     assert(_numOutstandingPackets == 0);
     if (lsqUnit()->trySendPacket(isLoad(), _packets.at(0))){
         _numOutstandingPackets = 1;
-        if (isLoad()) {
-            assert(lsqUnit()->inflightLoads.size() < lsqUnit()->numLoads() + 4);
-            lsqUnit()->inflightLoads.emplace_back(this);
-        }
+        trackInflightLoad();
     }
 }
 
@@ -1379,9 +1434,8 @@ LSQ::SplitDataRequest::sendPacketToCache()
                 _packets.at(numReceivedPackets + _numOutstandingPackets))) {
         _numOutstandingPackets++;
     }
-    if (_numOutstandingPackets == _packets.size() && isLoad()) {
-        assert(lsqUnit()->inflightLoads.size() < lsqUnit()->numLoads() + 4);
-        lsqUnit()->inflightLoads.emplace_back(this);
+    if (_numOutstandingPackets > 0 && isLoad()) {
+        trackInflightLoad();
     }
 }
 
