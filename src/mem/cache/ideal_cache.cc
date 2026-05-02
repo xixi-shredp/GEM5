@@ -39,17 +39,7 @@ IdealCache::CPUSidePort::recvFunctional(PacketPtr pkt)
 bool
 IdealCache::CPUSidePort::recvTimingReq(PacketPtr pkt)
 {
-    if (blockedPacket || needRetry) {
-        needRetry = true;
-        return false;
-    }
-
-    if (!owner->handleTimingReq(pkt, id)) {
-        needRetry = true;
-        return false;
-    }
-
-    return true;
+    return owner->handleTimingReq(pkt, id);
 }
 
 void
@@ -59,7 +49,7 @@ IdealCache::CPUSidePort::recvRespRetry()
     PacketPtr pkt = blockedPacket;
     blockedPacket = nullptr;
     if (sendPacket(pkt)) {
-        owner->releaseBlocked();
+        owner->processReadyResponses();
     }
 }
 
@@ -80,15 +70,6 @@ IdealCache::CPUSidePort::sendPacket(PacketPtr pkt)
     }
 
     return true;
-}
-
-void
-IdealCache::CPUSidePort::trySendRetry()
-{
-    if (needRetry && blockedPacket == nullptr) {
-        needRetry = false;
-        sendRetryReq();
-    }
 }
 
 IdealCache::MemSidePort::MemSidePort(const std::string &name,
@@ -121,7 +102,7 @@ IdealCache::IdealCache(const IdealCacheParams &params)
       memPort(params.name + ".mem_side", this),
       system(params.system),
       hitLatency(params.hit_latency),
-      releaseEvent([this] { completeAccess(); }, name())
+      sendEvent([this] { processReadyResponses(); }, name())
 {
     for (int i = 0; i < params.port_cpu_side_connection_count; ++i) {
         cpuPorts.emplace_back(name() + csprintf(".cpu_side[%d]", i), i, this);
@@ -160,20 +141,24 @@ IdealCache::getPort(const std::string &if_name, PortID idx)
 bool
 IdealCache::handleTimingReq(PacketPtr pkt, PortID port_id)
 {
-    if (blocked) {
-        return false;
-    }
-
-    blocked = true;
-    pendingAccess.pkt = pkt;
-    pendingAccess.port = port_id;
-    pendingAccess.needsResponse = pkt->needsResponse();
-
+    const bool needs_response = pkt->needsResponse();
     performIdealAccess(pkt);
-    if (!releaseEvent.scheduled()) {
-        schedule(releaseEvent, curTick() + hitLatency);
+    if (!needs_response) {
+        pendingDelete.reset(pkt);
+        return true;
     }
 
+    const Tick ready_tick = curTick() + hitLatency;
+    auto it = pendingResponses.end();
+    while (it != pendingResponses.begin()) {
+        auto prev = std::prev(it);
+        if (prev->readyTick <= ready_tick) {
+            break;
+        }
+        it = prev;
+    }
+    pendingResponses.insert(it, PendingResponse{pkt, port_id, ready_tick});
+    scheduleNextReadyResponse();
     return true;
 }
 
@@ -201,32 +186,54 @@ IdealCache::performIdealAccess(PacketPtr pkt)
 }
 
 void
-IdealCache::completeAccess()
+IdealCache::processReadyResponses()
 {
-    assert(blocked);
-    PacketPtr pkt = pendingAccess.pkt;
-    PortID port_id = pendingAccess.port;
+    for (auto it = pendingResponses.begin(); it != pendingResponses.end();) {
+        if (it->readyTick > curTick()) {
+            break;
+        }
 
-    if (pendingAccess.needsResponse) {
+        const PortID port_id = it->port;
         panic_if(port_id == InvalidPortID,
                  "IdealCache %s lost the source port for %s", name(),
-                 pkt->print());
-        if (cpuPorts[port_id].sendPacket(pkt)) {
-            releaseBlocked();
+                 it->pkt->print());
+
+        auto &port = cpuPorts[port_id];
+        if (port.blocked()) {
+            ++it;
+            continue;
         }
-    } else {
-        releaseBlocked();
+
+        PacketPtr pkt = it->pkt;
+        if (port.sendPacket(pkt)) {
+            it = pendingResponses.erase(it);
+        } else {
+            it = pendingResponses.erase(it);
+        }
     }
+
+    scheduleNextReadyResponse();
 }
 
 void
-IdealCache::releaseBlocked()
+IdealCache::scheduleNextReadyResponse()
 {
-    blocked = false;
-    pendingAccess = {};
+    if (sendEvent.scheduled()) {
+        deschedule(sendEvent);
+    }
 
-    for (auto &port : cpuPorts) {
-        port.trySendRetry();
+    Tick next_tick = MaxTick;
+    for (const auto &response : pendingResponses) {
+        const auto &port = cpuPorts[response.port];
+        if (port.blocked()) {
+            continue;
+        }
+        next_tick = response.readyTick;
+        break;
+    }
+
+    if (next_tick != MaxTick) {
+        schedule(sendEvent, std::max(next_tick, curTick()));
     }
 }
 
