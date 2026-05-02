@@ -162,6 +162,17 @@ class CompressedTags(SectorTags):
     size = Parent.size * Self.max_compression_ratio
 
 
+class InfiniteTags(BaseTags):
+    type = "InfiniteTags"
+    cxx_header = "mem/cache/tags/infinite_tags.hh"
+    cxx_class = "gem5::InfiniteTags"
+
+    # BaseCache uses the tag store's indexing policy to build its
+    # temporary block tag extractor. InfiniteTags ignores this policy
+    # for real lookup and allocation, which are backed by a linked list.
+    indexing_policy = TaggedSetAssociative(assoc=1)
+
+
 class FALRU(BaseTags):
     type = "FALRU"
     cxx_header = "mem/cache/tags/fa_lru.hh"

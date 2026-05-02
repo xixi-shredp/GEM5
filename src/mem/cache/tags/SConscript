@@ -35,6 +35,7 @@ SimObject(
         "BaseSetAssoc",
         "SectorTags",
         "CompressedTags",
+        "InfiniteTags",
         "FALRU",
         "TaggedIndexingPolicy",
         "TaggedSetAssociative",
@@ -46,6 +47,7 @@ Source("base_set_assoc.cc")
 Source("compressed_tags.cc")
 Source("dueling.cc")
 Source("fa_lru.cc")
+Source("infinite_tags.cc")
 Source("sector_blk.cc")
 Source("sector_tags.cc")
 Source("super_blk.cc")
