@@ -113,7 +113,8 @@ CPU::CPU(const BaseO3CPUParams &params)
       globalFTSeqNum(1),
       system(params.system),
       lastRunningCycle(curCycle()),
-      cpuStats(this)
+      cpuStats(this),
+      topDownStats(this)
 {
     fatal_if(FullSystem && params.numThreads > 1,
             "SMT is not supported in O3 in full system mode currently.");
@@ -175,6 +176,12 @@ CPU::CPU(const BaseO3CPUParams &params)
     iew.setIEWQueue(&iewQueue);
     commit.setIEWQueue(&iewQueue);
     commit.setRenameQueue(&renameQueue);
+
+    fetch.setStallSignals(&stallSignals);
+    decode.setStallSignals(&stallSignals);
+    rename.setStallSignals(&stallSignals);
+    iew.setStallSignals(&stallSignals);
+    commit.setStallSignals(&stallSignals);
 
     commit.setIEWStage(&iew);
     rename.setIEWStage(&iew);
@@ -341,6 +348,71 @@ CPU::regProbePoints()
     commit.regProbePoints();
 }
 
+void
+CPU::recordFrontendBubbles(unsigned unusedSlots, unsigned slotWidth,
+                           bool fullFrontendWindow)
+{
+    if (unusedSlots == 0) {
+        return;
+    }
+
+    fetch.getFetchStats().fetchBubbles += unusedSlots;
+    if (fullFrontendWindow) {
+        fetch.getFetchStats().fetchBubbles_max++;
+    }
+}
+
+void
+CPU::recordRecoveryBubbles(unsigned unusedSlots)
+{
+    recordRecoveryBubbles(unusedSlots, 0);
+}
+
+void
+CPU::recordRecoveryBubbles(unsigned unusedSlots, unsigned branchSlots)
+{
+    if (unusedSlots == 0) {
+        return;
+    }
+
+    if (branchSlots > unusedSlots) {
+        branchSlots = unusedSlots;
+    }
+
+    auto &stats = commit.getStats();
+    stats.recoveryBubbles += unusedSlots;
+    stats.branchRecoveryBubbles += branchSlots;
+    stats.machineClearRecoveryBubbles += unusedSlots - branchSlots;
+}
+
+void
+CPU::recordBadSpecBubbles(unsigned unusedSlots, unsigned branchSlots)
+{
+    if (unusedSlots == 0) {
+        return;
+    }
+
+    if (branchSlots > unusedSlots) {
+        branchSlots = unusedSlots;
+    }
+
+    auto &stats = commit.getStats();
+    stats.badSpecNonIssueBubbles += unusedSlots;
+    stats.branchBadSpecNonIssueBubbles += branchSlots;
+    stats.machineClearBadSpecNonIssueBubbles += unusedSlots - branchSlots;
+}
+
+void
+CPU::recordBadSpecWrongPathIssue(bool fromBranch)
+{
+    auto &stats = commit.getStats();
+    if (fromBranch) {
+        stats.branchWrongPathFirstIssued++;
+    } else {
+        stats.machineClearWrongPathFirstIssued++;
+    }
+}
+
 CPU::CPUStats::CPUStats(CPU *cpu)
     : statistics::Group(cpu),
       ADD_STAT(timesIdled, statistics::units::Count::get(),
@@ -362,6 +434,397 @@ CPU::CPUStats::CPUStats(CPU *cpu)
 
     quiesceCycles
         .prereq(quiesceCycles);
+}
+
+CPU::TopDownStats::TopDownStats(CPU *cpu)
+    : statistics::Group(cpu),
+      ADD_STAT(baseRetiring,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level1: Retiring"),
+      ADD_STAT(frontendBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level1: Frontend Bound"),
+      ADD_STAT(frontendLatencyBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level2: |--Frontend Latency Bound"),
+      ADD_STAT(frontendBandwidthBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level2: |--Frontend Bandwidth Bound"),
+      ADD_STAT(badSpecBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level1: Bad Speculation"),
+      ADD_STAT(branchMissPrediction,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level2: |--Branch Missprediction"),
+      ADD_STAT(machineClears,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level2: |--Machine Clears"),
+      ADD_STAT(backendBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level1: Backend Bound"),
+      ADD_STAT(l1Overcount,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level1: Topdown overcount before Backend Bound clamp"),
+      ADD_STAT(coreBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level2: |--Core Bound"),
+      ADD_STAT(memoryBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level2: |--Memory Bound"),
+      ADD_STAT(l1Bound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level3:    |--L1 Bound"),
+      ADD_STAT(l1sBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level4:       |--L1 Scalar Bound"),
+      ADD_STAT(l1vusBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level4:       |--L1 VectorUnitStride Bound"),
+      ADD_STAT(l1vsBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level4:       |--L1 VectorStrided Bound"),
+      ADD_STAT(l1viBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level4:       |--L1 VectorIndexed Bound"),
+      ADD_STAT(l2Bound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level3:    |--L2 Bound"),
+      ADD_STAT(l2sBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level4:       |--L2 Scalar Bound"),
+      ADD_STAT(l2vusBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level4:       |--L2 VectorUnitStride Bound"),
+      ADD_STAT(l2vsBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level4:       |--L2 VectorStrided Bound"),
+      ADD_STAT(l2viBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level4:       |--L2 VectorIndexed Bound"),
+      ADD_STAT(l3Bound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level3:    |--L3 Bound"),
+      ADD_STAT(l3sBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level4:       |--L3 Scalar Bound"),
+      ADD_STAT(l3vusBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level4:       |--L3 VectorUnitStride Bound"),
+      ADD_STAT(l3vsBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level4:       |--L3 VectorStrided Bound"),
+      ADD_STAT(l3viBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level4:       |--L3 VectorIndexed Bound"),
+      ADD_STAT(memBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level3:    |--Memory Bound"),
+      ADD_STAT(memsBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level4:       |--Mem Scalar Bound"),
+      ADD_STAT(memvusBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level4:       |--Mem VectorUnitStride Bound"),
+      ADD_STAT(memvsBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level4:       |--Mem VectorStrided Bound"),
+      ADD_STAT(memviBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level4:       |--Mem VectorIndexed Bound"),
+      ADD_STAT(storeBound,
+               statistics::units::Rate<statistics::units::Count,
+                                       statistics::units::Cycle>::get(),
+               "Level3:    |--Store Bound")
+{
+    struct Breakdown
+    {
+        double baseRetiring = 0.0;
+        double frontendBound = 0.0;
+        double frontendLatencyBound = 0.0;
+        double frontendBandwidthBound = 0.0;
+        double badSpecBound = 0.0;
+        double branchMissPrediction = 0.0;
+        double machineClears = 0.0;
+        double backendBound = 0.0;
+        double l1Overcount = 0.0;
+        double coreBound = 0.0;
+        double memoryBound = 0.0;
+        double l1Bound = 0.0;
+        double l1sBound = 0.0;
+        double l1vusBound = 0.0;
+        double l1vsBound = 0.0;
+        double l1viBound = 0.0;
+        double l2Bound = 0.0;
+        double l2sBound = 0.0;
+        double l2vusBound = 0.0;
+        double l2vsBound = 0.0;
+        double l2viBound = 0.0;
+        double l3Bound = 0.0;
+        double l3sBound = 0.0;
+        double l3vusBound = 0.0;
+        double l3vsBound = 0.0;
+        double l3viBound = 0.0;
+        double memBound = 0.0;
+        double memsBound = 0.0;
+        double memvusBound = 0.0;
+        double memvsBound = 0.0;
+        double memviBound = 0.0;
+        double storeBound = 0.0;
+    };
+
+    auto safeDiv = [](double numerator, double denominator) {
+        return denominator > 0.0 ? numerator / denominator : 0.0;
+    };
+    auto boundedSubtract = [](double lhs, double rhs) {
+        const double result = lhs - rhs;
+        return result > 0.0 ? result : 0.0;
+    };
+    auto boundedAdd = [](double lhs, double rhs, double limit) {
+        const double sum = lhs + rhs;
+        return sum < limit ? sum : limit;
+    };
+    auto boundedMin = [](double lhs, double rhs) {
+        return lhs < rhs ? lhs : rhs;
+    };
+
+    auto compute = [cpu, safeDiv, boundedSubtract, boundedAdd, boundedMin]() {
+        Breakdown b;
+
+        double committedOps = 0.0;
+        for (ThreadID tid = 0; tid < cpu->numThreads; ++tid) {
+            committedOps += cpu->commitStats[tid]->numOps.value();
+        }
+
+        const double issueWidth = cpu->iew.getIssueWidth();
+        const double cycles = cpu->baseStats.numCycles.value();
+        const double slots = issueWidth * cycles;
+
+        const auto &fetchStats = cpu->fetch.getFetchStats();
+        const auto &commitStats = cpu->commit.getStats();
+        const auto &backendStats = cpu->iew.instQueue.backendStats;
+        const auto &iqStats = cpu->iew.instQueue.getIQStats();
+
+        b.baseRetiring = safeDiv(committedOps, slots);
+        b.frontendBound = safeDiv(fetchStats.fetchBubbles.value(), slots);
+        const double rawFrontendLatencyBound =
+            safeDiv(fetchStats.fetchBubbles_max.value(), cycles);
+        b.frontendLatencyBound =
+            boundedMin(rawFrontendLatencyBound, b.frontendBound);
+        b.frontendBandwidthBound =
+            boundedSubtract(b.frontendBound, b.frontendLatencyBound);
+
+        const double badSpecSlots =
+            boundedSubtract(iqStats.instsFirstIssued.value() +
+                                commitStats.recoveryBubbles.value() +
+                                commitStats.badSpecNonIssueBubbles.value(),
+                            committedOps);
+        b.badSpecBound = safeDiv(badSpecSlots, slots);
+        const double branchRecoverySlots =
+            commitStats.branchRecoveryBubbles.value();
+        const double machineClearRecoverySlots =
+            commitStats.machineClearRecoveryBubbles.value();
+        const double branchWrongPathSlots =
+            commitStats.branchWrongPathFirstIssued.value();
+        const double machineClearWrongPathSlots =
+            commitStats.machineClearWrongPathFirstIssued.value();
+        const double branchBadSpecBubbleSlots =
+            commitStats.branchBadSpecNonIssueBubbles.value();
+        const double machineClearBadSpecBubbleSlots =
+            commitStats.machineClearBadSpecNonIssueBubbles.value();
+        const double branchBadSpecSlots = branchWrongPathSlots +
+                                          branchRecoverySlots +
+                                          branchBadSpecBubbleSlots;
+        const double machineClearBadSpecSlots = machineClearWrongPathSlots +
+                                                machineClearRecoverySlots +
+                                                machineClearBadSpecBubbleSlots;
+        const double badSpecAttributionSlots =
+            branchBadSpecSlots + machineClearBadSpecSlots;
+        b.branchMissPrediction =
+            b.badSpecBound *
+            safeDiv(branchBadSpecSlots, badSpecAttributionSlots);
+        b.machineClears =
+            boundedSubtract(b.badSpecBound, b.branchMissPrediction);
+        const double l1Used =
+            b.frontendBound + b.badSpecBound + b.baseRetiring;
+        b.l1Overcount = boundedSubtract(l1Used, 1.0);
+        b.backendBound = boundedSubtract(1.0, l1Used);
+
+        const double rawTotal = backendStats.exec_stall_cycle.value();
+        const double rawLoadRaw = backendStats.memstall_any_load.value();
+        const double rawStoreRaw = backendStats.memstall_any_store.value();
+        const double rawMemory = boundedAdd(rawLoadRaw, rawStoreRaw, rawTotal);
+        const double rawLoadStoreTotal = rawLoadRaw + rawStoreRaw;
+        const double memoryScale = safeDiv(rawMemory, rawLoadStoreTotal);
+        double rawLoad = 0.0;
+        double rawStore = 0.0;
+
+        if (rawTotal > 0.0) {
+            rawLoad = rawLoadRaw * memoryScale;
+            rawStore = rawStoreRaw * memoryScale;
+            const double rawCore = boundedSubtract(rawTotal, rawMemory);
+
+            b.coreBound = b.backendBound * safeDiv(rawCore, rawTotal);
+            b.memoryBound = b.backendBound * safeDiv(rawMemory, rawTotal);
+        } else {
+            b.coreBound = b.backendBound;
+            b.memoryBound = 0.0;
+        }
+
+        const double rawLoadScale = safeDiv(rawLoad, rawLoadRaw);
+        const double rawL1Raw =
+            boundedSubtract(rawLoadRaw, backendStats.memstall_l1miss.value());
+        const double rawL2Raw =
+            boundedSubtract(backendStats.memstall_l1miss.value(),
+                            backendStats.memstall_l2miss.value());
+        const double rawL3Raw =
+            boundedSubtract(backendStats.memstall_l2miss.value(),
+                            backendStats.memstall_l3miss.value());
+        const double rawMemRaw = backendStats.memstall_l3miss.value();
+        const double rawL1 = rawL1Raw * rawLoadScale;
+        const double rawL2 = rawL2Raw * rawLoadScale;
+        const double rawL3 = rawL3Raw * rawLoadScale;
+        const double rawMem = rawMemRaw * rawLoadScale;
+        const double rawL3Total = rawL1 + rawL2 + rawL3 + rawMem + rawStore;
+
+        b.l1Bound = b.memoryBound * safeDiv(rawL1, rawL3Total);
+        b.l2Bound = b.memoryBound * safeDiv(rawL2, rawL3Total);
+        b.l3Bound = b.memoryBound * safeDiv(rawL3, rawL3Total);
+        b.memBound = b.memoryBound * safeDiv(rawMem, rawL3Total);
+        b.storeBound = b.memoryBound * safeDiv(rawStore, rawL3Total);
+
+        const double rawL1s =
+            boundedSubtract(backendStats.memstall_anymiss_s.value(),
+                            backendStats.memstall_l1miss_s.value());
+        const double rawL1vus =
+            boundedSubtract(backendStats.memstall_anymiss_vus.value(),
+                            backendStats.memstall_l1miss_vus.value());
+        const double rawL1vs =
+            boundedSubtract(backendStats.memstall_anymiss_vs.value(),
+                            backendStats.memstall_l1miss_vs.value());
+        const double rawL1vi =
+            boundedSubtract(backendStats.memstall_anymiss_vi.value(),
+                            backendStats.memstall_l1miss_vi.value());
+        const double rawL1BTotal = rawL1vi + rawL1vs + rawL1vus + rawL1s;
+        b.l1sBound = b.l1Bound * safeDiv(rawL1s, rawL1BTotal);
+        b.l1vusBound = b.l1Bound * safeDiv(rawL1vus, rawL1BTotal);
+        b.l1vsBound = b.l1Bound * safeDiv(rawL1vs, rawL1BTotal);
+        b.l1viBound = b.l1Bound * safeDiv(rawL1vi, rawL1BTotal);
+
+        const double rawL2s =
+            boundedSubtract(backendStats.memstall_l1miss_s.value(),
+                            backendStats.memstall_l2miss_s.value());
+        const double rawL2vus =
+            boundedSubtract(backendStats.memstall_l1miss_vus.value(),
+                            backendStats.memstall_l2miss_vus.value());
+        const double rawL2vs =
+            boundedSubtract(backendStats.memstall_l1miss_vs.value(),
+                            backendStats.memstall_l2miss_vs.value());
+        const double rawL2vi =
+            boundedSubtract(backendStats.memstall_l1miss_vi.value(),
+                            backendStats.memstall_l2miss_vi.value());
+        const double rawL2BTotal = rawL2vi + rawL2vs + rawL2vus + rawL2s;
+        b.l2sBound = b.l2Bound * safeDiv(rawL2s, rawL2BTotal);
+        b.l2vusBound = b.l2Bound * safeDiv(rawL2vus, rawL2BTotal);
+        b.l2vsBound = b.l2Bound * safeDiv(rawL2vs, rawL2BTotal);
+        b.l2viBound = b.l2Bound * safeDiv(rawL2vi, rawL2BTotal);
+
+        const double rawL3s =
+            boundedSubtract(backendStats.memstall_l2miss_s.value(),
+                            backendStats.memstall_l3miss_s.value());
+        const double rawL3vus =
+            boundedSubtract(backendStats.memstall_l2miss_vus.value(),
+                            backendStats.memstall_l3miss_vus.value());
+        const double rawL3vs =
+            boundedSubtract(backendStats.memstall_l2miss_vs.value(),
+                            backendStats.memstall_l3miss_vs.value());
+        const double rawL3vi =
+            boundedSubtract(backendStats.memstall_l2miss_vi.value(),
+                            backendStats.memstall_l3miss_vi.value());
+        const double rawL3BTotal = rawL3vi + rawL3vs + rawL3vus + rawL3s;
+        b.l3sBound = b.l3Bound * safeDiv(rawL3s, rawL3BTotal);
+        b.l3vusBound = b.l3Bound * safeDiv(rawL3vus, rawL3BTotal);
+        b.l3vsBound = b.l3Bound * safeDiv(rawL3vs, rawL3BTotal);
+        b.l3viBound = b.l3Bound * safeDiv(rawL3vi, rawL3BTotal);
+
+        const double rawmems = backendStats.memstall_l3miss_s.value();
+        const double rawmemvus = backendStats.memstall_l3miss_vus.value();
+        const double rawmemvs = backendStats.memstall_l3miss_vs.value();
+        const double rawmemvi = backendStats.memstall_l3miss_vi.value();
+        const double rawmemBTotal = rawmemvi + rawmemvs + rawmemvus + rawmems;
+        b.memsBound = b.memBound * safeDiv(rawmems, rawmemBTotal);
+        b.memvusBound = b.memBound * safeDiv(rawmemvus, rawmemBTotal);
+        b.memvsBound = b.memBound * safeDiv(rawmemvs, rawmemBTotal);
+        b.memviBound = b.memBound * safeDiv(rawmemvi, rawmemBTotal);
+
+        return b;
+    };
+
+    baseRetiring.functor([compute]() { return compute().baseRetiring; });
+    frontendBound.functor([compute]() { return compute().frontendBound; });
+    frontendLatencyBound.functor(
+        [compute]() { return compute().frontendLatencyBound; });
+    frontendBandwidthBound.functor(
+        [compute]() { return compute().frontendBandwidthBound; });
+    badSpecBound.functor([compute]() { return compute().badSpecBound; });
+    branchMissPrediction.functor(
+        [compute]() { return compute().branchMissPrediction; });
+    machineClears.functor([compute]() { return compute().machineClears; });
+    backendBound.functor([compute]() { return compute().backendBound; });
+    l1Overcount.functor([compute]() { return compute().l1Overcount; });
+    coreBound.functor([compute]() { return compute().coreBound; });
+    memoryBound.functor([compute]() { return compute().memoryBound; });
+    l1Bound.functor([compute]() { return compute().l1Bound; });
+    l1sBound.functor([compute]() { return compute().l1sBound; });
+    l1vusBound.functor([compute]() { return compute().l1vusBound; });
+    l1vsBound.functor([compute]() { return compute().l1vsBound; });
+    l1viBound.functor([compute]() { return compute().l1viBound; });
+    l2Bound.functor([compute]() { return compute().l2Bound; });
+    l2sBound.functor([compute]() { return compute().l2sBound; });
+    l2vusBound.functor([compute]() { return compute().l2vusBound; });
+    l2vsBound.functor([compute]() { return compute().l2vsBound; });
+    l2viBound.functor([compute]() { return compute().l2viBound; });
+    l3Bound.functor([compute]() { return compute().l3Bound; });
+    l3sBound.functor([compute]() { return compute().l3sBound; });
+    l3vusBound.functor([compute]() { return compute().l3vusBound; });
+    l3vsBound.functor([compute]() { return compute().l3vsBound; });
+    l3viBound.functor([compute]() { return compute().l3viBound; });
+    memBound.functor([compute]() { return compute().memBound; });
+    memsBound.functor([compute]() { return compute().memsBound; });
+    memvusBound.functor([compute]() { return compute().memvusBound; });
+    memvsBound.functor([compute]() { return compute().memvsBound; });
+    memviBound.functor([compute]() { return compute().memviBound; });
+    storeBound.functor([compute]() { return compute().storeBound; });
 }
 
 void

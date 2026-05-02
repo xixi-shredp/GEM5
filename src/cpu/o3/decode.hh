@@ -123,6 +123,12 @@ class Decode
     /** Sets pointer to list of active threads. */
     void setActiveThreads(std::list<ThreadID> *at_ptr);
 
+    void
+    setStallSignals(StallSignals *stall_signals)
+    {
+        stallSig = stall_signals;
+    }
+
     /** Perform sanity checks after a drain. */
     void drainSanityCheck() const;
 
@@ -207,10 +213,15 @@ class Decode
      */
     unsigned squash(ThreadID tid);
 
+    void setAllStalls(StallReason decodeStall);
+    void setStallsFrom(size_t first, StallReason decodeStall);
+
   private:
     // Interfaces to objects outside of decode.
     /** CPU interface. */
     CPU *cpu;
+
+    StallSignals *stallSig = nullptr;
 
     /** Time buffer interface. */
     TimeBuffer<TimeStruct> *timeBuffer;
@@ -259,6 +270,9 @@ class Decode
 
     /** Tracks which stages are telling decode to stall. */
     Stalls stalls[MaxThreads];
+
+    std::vector<StallReason> decodeStalls;
+    StallReason blockReason = NoStall;
 
     /** Rename to decode delay. */
     Cycles renameToDecodeDelay;

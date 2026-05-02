@@ -154,6 +154,12 @@ class IEW
     /** Sets pointer to list of active threads. */
     void setActiveThreads(std::list<ThreadID> *at_ptr);
 
+    void
+    setStallSignals(StallSignals *stall_signals)
+    {
+        stallSig = stall_signals;
+    }
+
     /** Sets pointer to the scoreboard. */
     void setScoreboard(Scoreboard *sb_ptr);
 
@@ -240,6 +246,59 @@ class IEW
         ldstQueue.setLastRetiredHtmUid(tid, htmUid);
     }
 
+    unsigned getIssueWidth()
+    {
+      return issueWidth;
+    }
+
+    void
+    recordIssueStageSlots(unsigned issuedSlots, bool backendStalled)
+    {
+        issuedToExecuteThisCycle += issuedSlots;
+        backendBlockedThisCycle |= backendStalled;
+    }
+
+    unsigned
+    getIssueStageSlotsUsedThisCycle() const
+    {
+        return issuedToExecuteThisCycle;
+    }
+
+    unsigned
+    getBadSpecBubbleSlotsThisCycle(unsigned unusedSlots) const
+    {
+        if (unusedSlots == 0) {
+            return 0;
+        }
+        if (badSpecRecoveryThisCycle) {
+            return unusedSlots;
+        }
+        if (!badSpecBubbleThisCycle) {
+            return 0;
+        }
+        if (badSpecBubbleSlotsThisCycle == 0) {
+            return 0;
+        }
+        if (badSpecBubbleSlotsThisCycle > unusedSlots) {
+            return unusedSlots;
+        }
+        return badSpecBubbleSlotsThisCycle;
+    }
+
+    bool
+    isBadSpecRecoveryThisCycle() const
+    {
+        return badSpecRecoveryThisCycle;
+    }
+
+    bool
+    isBadSpecBubbleThisCycle() const
+    {
+        return badSpecBubbleThisCycle;
+    }
+
+    void recordBadSpecBubbleReason(StallReason reason, size_t slot);
+
   private:
     /** Sends commit proper information for a squash due to a branch
      * mispredict.
@@ -264,6 +323,9 @@ class IEW
 
     /** Dispatches instructions to IQ and LSQ. */
     void dispatchInsts(ThreadID tid);
+
+    /** Measures top-down frontend bubbles at the rename/dispatch boundary. */
+    void measureFrontendBubbles();
 
     /** Executes instructions. In the case of memory operations, it informs the
      * LSQ to execute the instructions. Also handles any redirects that occur
@@ -296,12 +358,16 @@ class IEW
      */
     void tick();
 
+    auto& getIEWStats() { return iewStats; }
+
   private:
     /** Updates execution stats based on the instruction. */
     void updateExeInstStats(const DynInstPtr &inst);
 
     /** Pointer to main time buffer used for backwards communication. */
     TimeBuffer<TimeStruct> *timeBuffer;
+
+    StallSignals *stallSig = nullptr;
 
     /** Wire to write information heading to previous stages. */
     TimeBuffer<TimeStruct>::wire toFetch;
@@ -428,6 +494,10 @@ class IEW
         /** Stat for total number of cycles spent in each IEW state */
         statistics::Vector dispatchStatus;
         statistics::Vector execStatus;
+        statistics::Vector fetchStallReason;
+        statistics::Vector decodeStallReason;
+        statistics::Vector renameStallReason;
+        statistics::Vector dispatchStallReason;
         /** Stat for total number of instructions dispatched. */
         statistics::Scalar dispatchedInsts;
         /** Stat for total number of squashed instructions dispatch skips. */
@@ -476,6 +546,34 @@ class IEW
         /** Average number of woken instructions per writeback. */
         statistics::Formula wbFanout;
     } iewStats;
+
+    unsigned issuedToExecuteThisCycle = 0;
+    bool backendBlockedThisCycle = false;
+    bool badSpecBubbleThisCycle = false;
+    unsigned badSpecBubbleSlotsThisCycle = 0;
+    unsigned badSpecBubbleBranchSlotsThisCycle = 0;
+    unsigned badSpecBubbleSquashedSlotsThisCycle = 0;
+    unsigned badSpecBubbleBranchSquashedSlotsThisCycle = 0;
+    bool badSpecBubbleFromBranchThisCycle = false;
+    bool badSpecBubbleFromMachineClearThisCycle = false;
+    bool badSpecBubbleFromBranchThread[MaxThreads] = {};
+    bool badSpecBubbleFromMachineClearThread[MaxThreads] = {};
+    bool badSpecRecoveryThisCycle = false;
+    bool badSpecRecoveryBranchThisCycle = false;
+    bool badSpecRecoveryMachineClearThisCycle = false;
+
+    std::vector<StallReason> dispatchStalls;
+    std::vector<bool> dispatchStallFromBranch;
+    std::vector<bool> dispatchStallFromMachineClear;
+    size_t dispatchStallIndex = 0;
+    std::queue<StallReason> dispatchResidualStalls;
+    StallReason blockReason = NoStall;
+
+    void setAllStalls(StallReason dispatchStall);
+    void setStallsFrom(size_t first, StallReason dispatchStall);
+    void enqueueDispatchResidualStalls(StallReason dispatchStall,
+                                       size_t first);
+    void finalizeDispatchStalls();
 };
 
 } // namespace o3

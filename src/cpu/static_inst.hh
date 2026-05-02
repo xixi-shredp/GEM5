@@ -197,6 +197,36 @@ class StaticInst : public RefCounted, public StaticInstFlags
     bool isHtmCancel() const { return flags[IsHtmCancel]; }
 
     bool isInvalid() const { return flags[IsInvalid]; }
+    
+    
+    bool isVectorUnitStrideLoad() const {
+        return opClass() == SimdUnitStrideLoadOp                        ||
+               opClass() == SimdUnitStrideSegmentedLoadOp               ||
+               opClass() == SimdUnitStrideMaskLoadOp                    ||
+               opClass() == SimdUnitStrideFaultOnlyFirstLoadOp          ||
+               opClass() == SimdUnitStrideSegmentedFaultOnlyFirstLoadOp ||
+               opClass() == SimdWholeRegisterLoadOp;
+    }
+    bool isVectorStridedLoad() const {
+        return opClass() == SimdStridedLoadOp ||
+               opClass() == SimdStrideSegmentedLoadOp;
+    }
+    bool isVectorIndexedLoad() const {
+        return opClass() == SimdIndexedLoadOp;
+    }
+    bool isVectorUnitStrideStore() const {
+        return opClass() == SimdUnitStrideStoreOp               ||
+               opClass() == SimdUnitStrideSegmentedStoreOp      ||
+               opClass() == SimdUnitStrideMaskStoreOp           ||
+               opClass() == SimdWholeRegisterStoreOp;
+    }
+    bool isVectorStridedStore() const {
+        return opClass() == SimdStridedStoreOp ||
+               opClass() == SimdStrideSegmentedStoreOp;
+    }
+    bool isVectorIndexedStore() const {
+        return opClass() == SimdIndexedStoreOp;
+    }
 
     bool
     isHtmCmd() const

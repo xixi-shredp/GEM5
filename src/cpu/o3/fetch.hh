@@ -228,6 +228,12 @@ class Fetch
     /** Sets pointer to time buffer used to communicate to the next stage. */
     void setFetchQueue(TimeBuffer<FetchStruct> *fq_ptr);
 
+    void
+    setStallSignals(StallSignals *stall_signals)
+    {
+        stallSig = stall_signals;
+    }
+
     /** Sets pointer to branch address calculation stage and FTQ */
     void setBACandFTQPtr(BAC *bac_ptr, FTQ *ftq_ptr);
 
@@ -342,6 +348,8 @@ class Fetch
      */
     void tick();
 
+    void updateStallReasons(unsigned insts_to_decode);
+
     /** Checks all input signals and updates the status as necessary.
      *  @return: Returns if the status has changed due to input signals.
      */
@@ -364,6 +372,8 @@ class Fetch
     InstDecoder *decoder[MaxThreads];
 
     RequestPort &getInstPort() { return icachePort; }
+
+    auto& getFetchStats() { return fetchStats; }
 
   private:
     DynInstPtr buildInst(ThreadID tid, StaticInstPtr staticInst,
@@ -390,11 +400,17 @@ class Fetch
     void pipelineIcacheAccesses(ThreadID tid);
 
     /** Profile the reasons of fetch stall. */
-    void profileStall(ThreadID tid);
+    StallReason profileStall(ThreadID tid);
+
+    void setAllFetchStalls(StallReason stall);
+
+    bool hasAnyFetchStallReason() const;
 
   private:
     /** Pointer to the O3CPU. */
     CPU *cpu;
+
+    StallSignals *stallSig = nullptr;
 
     /** Time buffer interface. */
     TimeBuffer<TimeStruct> *timeBuffer;
@@ -453,6 +469,8 @@ class Fetch
 
     /** Tracks which stages are telling fetch to stall. */
     Stalls stalls[MaxThreads];
+
+    std::vector<StallReason> stallReason;
 
     /** Enables the decoupled front-end */
     const bool decoupledFrontEnd;
@@ -581,6 +599,10 @@ class Fetch
         statistics::Formula idleRate;
         /*Number of fetch target processed per cycle*/
         statistics::Distribution ftNumber;
+        /** Unutilized issue-pipeline slots while there is no backend-stall */
+        statistics::Scalar fetchBubbles;
+        /** Cycles that fetch 0 instruction while there is no backend-stall */
+        statistics::Scalar fetchBubbles_max;
     } fetchStats;
 };
 

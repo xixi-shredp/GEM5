@@ -74,6 +74,180 @@ std::string IEW::IEWStats::statusStrings[ThreadStatusMax] = {
 };
 // clang-format on
 
+static const char *
+stallReasonName(StallReason reason)
+{
+    switch (reason) {
+        case NoStall:
+            return "NoStall";
+        case IcacheStall:
+            return "IcacheStall";
+        case ITlbStall:
+            return "ITlbStall";
+        case DTlbStall:
+            return "DTlbStall";
+        case BpStall:
+            return "BpStall";
+        case IntStall:
+            return "IntStall";
+        case TrapStall:
+            return "TrapStall";
+        case FTQBubble:
+            return "FTQBubble";
+        case FetchFragStall:
+            return "FetchFragStall";
+        case OtherFetchStall:
+            return "OtherFetchStall";
+        case OtherFragStall:
+            return "OtherFragStall";
+        case SquashStall:
+            return "SquashStall";
+        case FetchBufferInvalid:
+            return "FetchBufferInvalid";
+        case InstMisPred:
+            return "InstMisPred";
+        case InstSquashed:
+            return "InstSquashed";
+        case SerializeStall:
+            return "SerializeStall";
+        case ScalarLongExecute:
+            return "ScalarLongExecute";
+        case VectorLongExecute:
+            return "VectorLongExecute";
+        case InstNotReady:
+            return "InstNotReady";
+        case LoadL1Bound:
+            return "LoadL1Bound";
+        case LoadL2Bound:
+            return "LoadL2Bound";
+        case LoadL3Bound:
+            return "LoadL3Bound";
+        case LoadMemBound:
+            return "LoadMemBound";
+        case StoreL1Bound:
+            return "StoreL1Bound";
+        case StoreL2Bound:
+            return "StoreL2Bound";
+        case StoreL3Bound:
+            return "StoreL3Bound";
+        case StoreMemBound:
+            return "StoreMemBound";
+        case MemSquashed:
+            return "MemSquashed";
+        case MemNotReady:
+            return "MemNotReady";
+        case MemCommitRateLimit:
+            return "MemCommitRateLimit";
+        case Atomic:
+            return "Atomic";
+        case OtherMemStall:
+            return "OtherMemStall";
+        case MemDQBandwidth:
+            return "MemDQBandwidth";
+        case IntDQBandwidth:
+            return "IntDQBandwidth";
+        case FVDQBandwidth:
+            return "FVDQBandwidth";
+        case VectorReadyButNotIssued:
+            return "VectorReadyButNotIssued";
+        case ScalarReadyButNotIssued:
+            return "ScalarReadyButNotIssued";
+        case ResumeUnblock:
+            return "ResumeUnblock";
+        case CommitSquash:
+            return "CommitSquash";
+        case ROBFull:
+            return "ROBFull";
+        case RegFull:
+            return "RegFull";
+        case OtherStall:
+            return "OtherStall";
+        case NumStallReasons:
+            return "NumStallReasons";
+    }
+
+    return "Unknown";
+}
+
+static bool
+isBackendBoundStallReason(StallReason reason)
+{
+    switch (reason) {
+        case DTlbStall:
+        case SerializeStall:
+        case ScalarLongExecute:
+        case VectorLongExecute:
+        case InstNotReady:
+        case LoadL1Bound:
+        case LoadL2Bound:
+        case LoadL3Bound:
+        case LoadMemBound:
+        case StoreL1Bound:
+        case StoreL2Bound:
+        case StoreL3Bound:
+        case StoreMemBound:
+        case MemNotReady:
+        case MemCommitRateLimit:
+        case Atomic:
+        case OtherMemStall:
+        case MemDQBandwidth:
+        case IntDQBandwidth:
+        case FVDQBandwidth:
+        case VectorReadyButNotIssued:
+        case ScalarReadyButNotIssued:
+        case ROBFull:
+        case RegFull:
+        case OtherStall:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool
+isBadSpecBubbleStallReason(StallReason reason)
+{
+    switch (reason) {
+        case BpStall:
+        case TrapStall:
+        case SquashStall:
+        case InstMisPred:
+        case InstSquashed:
+        case MemSquashed:
+        case CommitSquash:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool
+isBranchBadSpecBubbleStallReason(StallReason reason)
+{
+    switch (reason) {
+        case BpStall:
+        case InstMisPred:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static StallReason
+dispatchQueueBandwidthReason(const DynInstPtr &inst)
+{
+    if (!inst) {
+        return OtherStall;
+    }
+    if (inst->isMemRef()) {
+        return MemDQBandwidth;
+    }
+    if (inst->isFloating() || inst->isVector()) {
+        return FVDQBandwidth;
+    }
+    return IntDQBandwidth;
+}
+
 IEW::IEW(CPU *_cpu, const BaseO3CPUParams &params)
     : issueToExecQueue(params.backComSize, params.forwardComSize),
       cpu(_cpu),
@@ -124,6 +298,9 @@ IEW::IEW(CPU *_cpu, const BaseO3CPUParams &params)
     updateLSQNextCycle = false;
 
     skidBufferMax = (renameToIEWDelay + 1) * params.renameWidth;
+    dispatchStalls.resize(dispatchWidth, NoStall);
+    dispatchStallFromBranch.resize(dispatchWidth, false);
+    dispatchStallFromMachineClear.resize(dispatchWidth, false);
 }
 
 std::string
@@ -159,6 +336,14 @@ IEW::IEWStats::IEWStats(CPU *cpu)
                "Dispatch status cycles"),
       ADD_STAT(execStatus, statistics::units::Cycle::get(),
                "Number of cycles IEW is blocking"),
+      ADD_STAT(fetchStallReason, statistics::units::Count::get(),
+               "Number of fetch stall reasons each tick"),
+      ADD_STAT(decodeStallReason, statistics::units::Count::get(),
+               "Number of decode stall reasons each tick"),
+      ADD_STAT(renameStallReason, statistics::units::Count::get(),
+               "Number of rename stall reasons each tick"),
+      ADD_STAT(dispatchStallReason, statistics::units::Count::get(),
+               "Number of dispatch stall reasons each tick"),
       ADD_STAT(dispatchedInsts, statistics::units::Count::get(),
                "Number of instructions dispatched to IQ"),
       ADD_STAT(dispSquashedInsts, statistics::units::Count::get(),
@@ -211,6 +396,23 @@ IEW::IEWStats::IEWStats(CPU *cpu)
         execStatus.subname(i, statusStrings[i]);
         execStatus.subdesc(i,
                            "Number of cycles dispatch is " + statusStrings[i]);
+    }
+
+    fetchStallReason.init(NumStallReasons)
+        .flags(statistics::total | statistics::pdf);
+    decodeStallReason.init(NumStallReasons)
+        .flags(statistics::total | statistics::pdf);
+    renameStallReason.init(NumStallReasons)
+        .flags(statistics::total | statistics::pdf);
+    dispatchStallReason.init(NumStallReasons)
+        .flags(statistics::total | statistics::pdf);
+
+    for (int i = 0; i < NumStallReasons; ++i) {
+        const char *name = stallReasonName(static_cast<StallReason>(i));
+        fetchStallReason.subname(i, name);
+        decodeStallReason.subname(i, name);
+        renameStallReason.subname(i, name);
+        dispatchStallReason.subname(i, name);
     }
 
     instsToCommit
@@ -488,6 +690,9 @@ IEW::squashDueToBranch(const DynInstPtr& inst, ThreadID tid)
         toCommit->mispredictInst[tid] = inst;
         toCommit->includeSquashInst[tid] = false;
 
+        badSpecBubbleThisCycle = true;
+        badSpecBubbleFromBranchThisCycle = true;
+        badSpecBubbleFromBranchThread[tid] = true;
         wroteToTimeBuffer = true;
     }
 
@@ -515,6 +720,9 @@ IEW::squashDueToMemOrder(const DynInstPtr& inst, ThreadID tid)
         // Must include the memory violator in the squash.
         toCommit->includeSquashInst[tid] = true;
 
+        badSpecBubbleThisCycle = true;
+        badSpecBubbleFromMachineClearThisCycle = true;
+        badSpecBubbleFromMachineClearThread[tid] = true;
         wroteToTimeBuffer = true;
     }
 }
@@ -523,6 +731,13 @@ void
 IEW::block(ThreadID tid)
 {
     DPRINTF(IEW, "[tid:%i] Blocking.\n", tid);
+
+    if (blockReason == NoStall) {
+        blockReason = OtherStall;
+    }
+    stallSig->blockRename[tid] = true;
+    stallSig->renameBlockReason[tid] = blockReason;
+    toRename->iewInfo[tid].blockReason = blockReason;
 
     if (dispatchStatus[tid] != Blocked &&
         dispatchStatus[tid] != Unblocking) {
@@ -547,6 +762,9 @@ IEW::unblock(ThreadID tid)
     // Also switch status to running.
     if (skidBuffer[tid].empty()) {
         toRename->iewUnblock[tid] = true;
+        toRename->iewInfo[tid].blockReason = NoStall;
+        stallSig->blockRename[tid] = false;
+        stallSig->renameBlockReason[tid] = NoStall;
         wroteToTimeBuffer = true;
         DPRINTF(IEW, "[tid:%i] Done unblocking.\n",tid);
         dispatchStatus[tid] = Running;
@@ -703,12 +921,27 @@ IEW::checkStall(ThreadID tid)
 {
     bool ret_val(false);
 
-    if (fromCommit->commitInfo[tid].robSquashing) {
+    if (stallSig->blockIEW[tid]) {
         DPRINTF(IEW,"[tid:%i] Stall from Commit stage detected.\n",tid);
+        blockReason = stallSig->iewBlockReason[tid] == NoStall
+                          ? CommitSquash
+                          : stallSig->iewBlockReason[tid];
+        ret_val = true;
+    } else if (fromCommit->commitInfo[tid].robSquashing) {
+        DPRINTF(IEW, "[tid:%i] Stall from Commit stage detected.\n", tid);
+        blockReason = CommitSquash;
         ret_val = true;
     } else if (instQueue.isFull(tid)) {
         DPRINTF(IEW,"[tid:%i] Stall: IQ  is full.\n",tid);
+        blockReason = OtherStall;
+        backendBlockedThisCycle = true;
         ret_val = true;
+    }
+
+    if (ret_val && (blockReason == CommitSquash || blockReason == TrapStall)) {
+        badSpecBubbleThisCycle = true;
+    } else if (ret_val) {
+        backendBlockedThisCycle = true;
     }
 
     return ret_val;
@@ -726,6 +959,7 @@ IEW::checkSignalsAndUpdate(ThreadID tid)
 
     if (fromCommit->commitInfo[tid].squash) {
         squash(tid);
+        setAllStalls(CommitSquash);
 
         if (dispatchStatus[tid] == Blocked ||
             dispatchStatus[tid] == Unblocking) {
@@ -743,12 +977,14 @@ IEW::checkSignalsAndUpdate(ThreadID tid)
 
         dispatchStatus[tid] = Squashing;
         emptyRenameInsts(tid);
+        setAllStalls(CommitSquash);
         wroteToTimeBuffer = true;
     }
 
     if (checkStall(tid)) {
         block(tid);
         dispatchStatus[tid] = Blocked;
+        setAllStalls(blockReason);
         return;
     }
 
@@ -894,10 +1130,9 @@ IEW::dispatchInsts(ThreadID tid)
 
     // Loop through the instructions, putting them in the instruction
     // queue.
-    for ( ; dis_num_inst < insts_to_add &&
-              dis_num_inst < dispatchWidth;
-          ++dis_num_inst)
-    {
+    for (; dis_num_inst < insts_to_add && dis_num_inst < dispatchWidth &&
+           dispatchStallIndex < dispatchStalls.size();
+         ++dis_num_inst) {
         inst = insts_to_dispatch.front();
 
         if (dispatchStatus[tid] == Unblocking) {
@@ -922,6 +1157,19 @@ IEW::dispatchInsts(ThreadID tid)
                     "not adding to IQ.\n", tid);
 
             ++iewStats.dispSquashedInsts;
+            badSpecBubbleThisCycle = true;
+            if (dispatchStallIndex < dispatchStalls.size()) {
+                dispatchStalls[dispatchStallIndex] = InstSquashed;
+                dispatchStallFromBranch[dispatchStallIndex] =
+                    badSpecBubbleFromBranchThread[tid] ||
+                    (fromCommit->commitInfo[tid].mispredRecovery &&
+                     fromCommit->commitInfo[tid].mispredRecoveryBranch);
+                dispatchStallFromMachineClear[dispatchStallIndex] =
+                    badSpecBubbleFromMachineClearThread[tid] ||
+                    (fromCommit->commitInfo[tid].mispredRecovery &&
+                     !fromCommit->commitInfo[tid].mispredRecoveryBranch);
+                dispatchStallIndex++;
+            }
 
             insts_to_dispatch.pop();
 
@@ -943,6 +1191,8 @@ IEW::dispatchInsts(ThreadID tid)
             DPRINTF(IEW, "[tid:%i] Issue: IQ has become full.\n", tid);
 
             // Call function to start blocking.
+            blockReason = dispatchQueueBandwidthReason(inst);
+            backendBlockedThisCycle = true;
             block(tid);
 
             // Set unblock to false. Special case where we are using
@@ -962,6 +1212,8 @@ IEW::dispatchInsts(ThreadID tid)
                     inst->isLoad() ? "LQ" : "SQ");
 
             // Call function to start blocking.
+            blockReason = MemDQBandwidth;
+            backendBlockedThisCycle = true;
             block(tid);
 
             // Set unblock to false. Special case where we are using
@@ -1055,6 +1307,7 @@ IEW::dispatchInsts(ThreadID tid)
             inst->setExecuted();
             inst->setCanCommit();
 
+            instQueue.recordBypassIssue(inst);
             instQueue.recordProducer(inst);
 
             cpu->executeStats[tid]->numNop++;
@@ -1086,6 +1339,12 @@ IEW::dispatchInsts(ThreadID tid)
             instQueue.insert(inst);
         }
 
+        if (dispatchStallIndex < dispatchStalls.size()) {
+            dispatchStalls[dispatchStallIndex] = NoStall;
+            dispatchStallFromBranch[dispatchStallIndex] = false;
+            dispatchStallFromMachineClear[dispatchStallIndex] = false;
+            dispatchStallIndex++;
+        }
         insts_to_dispatch.pop();
 
         toRename->iewInfo[tid].dispatched++;
@@ -1099,8 +1358,15 @@ IEW::dispatchInsts(ThreadID tid)
 
     if (!insts_to_dispatch.empty()) {
         DPRINTF(IEW,"[tid:%i] Issue: Bandwidth Full. Blocking.\n", tid);
+        if (blockReason == NoStall) {
+            blockReason = OtherFragStall;
+        }
         block(tid);
         toRename->iewUnblock[tid] = false;
+    }
+
+    if (blockReason != NoStall) {
+        enqueueDispatchResidualStalls(blockReason, dispatchStallIndex);
     }
 
     if (dispatchStatus[tid] == Idle && dis_num_inst) {
@@ -1110,6 +1376,63 @@ IEW::dispatchInsts(ThreadID tid)
     }
 
     dis_num_inst = 0;
+}
+
+void
+IEW::enqueueDispatchResidualStalls(StallReason dispatchStall, size_t first)
+{
+    if (dispatchStall == NoStall) {
+        return;
+    }
+
+    if (first > dispatchStalls.size()) {
+        first = dispatchStalls.size();
+    }
+
+    for (size_t i = first; i < dispatchStalls.size(); ++i) {
+        dispatchResidualStalls.push(dispatchStall);
+    }
+}
+
+void
+IEW::finalizeDispatchStalls()
+{
+    for (size_t i = dispatchStallIndex; i < dispatchStalls.size(); ++i) {
+        dispatchStallFromBranch[i] = false;
+        dispatchStallFromMachineClear[i] = false;
+        if (!dispatchResidualStalls.empty()) {
+            dispatchStalls[i] = dispatchResidualStalls.front();
+            dispatchResidualStalls.pop();
+        } else if (i < fromRename->renameStallReason.size() &&
+                   fromRename->renameStallReason[i] != NoStall) {
+            dispatchStalls[i] = fromRename->renameStallReason[i];
+        } else {
+            dispatchStalls[i] = OtherFragStall;
+        }
+    }
+}
+
+void
+IEW::setAllStalls(StallReason dispatchStall)
+{
+    if (dispatchStall == NoStall) {
+        setStallsFrom(0, NoStall);
+        for (size_t i = 0; i < dispatchStalls.size(); ++i) {
+            dispatchStallFromBranch[i] = false;
+            dispatchStallFromMachineClear[i] = false;
+        }
+        return;
+    }
+    setStallsFrom(dispatchStallIndex, dispatchStall);
+    enqueueDispatchResidualStalls(dispatchStall, dispatchStallIndex);
+}
+
+void
+IEW::setStallsFrom(size_t first, StallReason dispatchStall)
+{
+    for (size_t i = first; i < dispatchStalls.size(); ++i) {
+        dispatchStalls[i] = dispatchStall;
+    }
 }
 
 void
@@ -1427,8 +1750,108 @@ IEW::writebackInsts()
 }
 
 void
+IEW::measureFrontendBubbles()
+{
+    if (activeThreads->empty()) {
+        return;
+    }
+
+    int unused_slots = issueWidth > issuedToExecuteThisCycle
+                           ? issueWidth - issuedToExecuteThisCycle
+                           : 0;
+    if (unused_slots <= 0) {
+        return;
+    }
+    const bool full_frontend_window =
+        static_cast<unsigned>(unused_slots) == issueWidth;
+
+    if (badSpecRecoveryThisCycle) {
+        unsigned branch_slots = 0;
+        if (badSpecRecoveryBranchThisCycle &&
+            badSpecRecoveryMachineClearThisCycle) {
+            branch_slots = unused_slots / 2;
+        } else if (badSpecRecoveryBranchThisCycle) {
+            branch_slots = unused_slots;
+        }
+        cpu->recordRecoveryBubbles(unused_slots, branch_slots);
+        return;
+    }
+
+    if (badSpecBubbleThisCycle && badSpecBubbleSlotsThisCycle != 0) {
+        unsigned bubble_slots = badSpecBubbleSlotsThisCycle;
+        if (bubble_slots > static_cast<unsigned>(unused_slots)) {
+            bubble_slots = unused_slots;
+        }
+
+        unsigned branch_slots = badSpecBubbleBranchSlotsThisCycle;
+        const unsigned squashed_slots =
+            badSpecBubbleBranchSquashedSlotsThisCycle > bubble_slots
+                ? bubble_slots
+                : badSpecBubbleBranchSquashedSlotsThisCycle;
+        branch_slots += squashed_slots;
+        if (branch_slots > bubble_slots) {
+            branch_slots = bubble_slots;
+        }
+        cpu->recordBadSpecBubbles(bubble_slots, branch_slots);
+        if (bubble_slots >= static_cast<unsigned>(unused_slots)) {
+            return;
+        }
+        unused_slots -= bubble_slots;
+    }
+
+    if (!backendBlockedThisCycle) {
+        cpu->recordFrontendBubbles(unused_slots, issueWidth,
+                                   full_frontend_window);
+    }
+}
+
+void
 IEW::tick()
 {
+    blockReason = NoStall;
+    issuedToExecuteThisCycle = 0;
+    backendBlockedThisCycle = false;
+    badSpecBubbleThisCycle = false;
+    badSpecBubbleSlotsThisCycle = 0;
+    badSpecBubbleBranchSlotsThisCycle = 0;
+    badSpecBubbleSquashedSlotsThisCycle = 0;
+    badSpecBubbleBranchSquashedSlotsThisCycle = 0;
+    badSpecBubbleFromBranchThisCycle = false;
+    badSpecBubbleFromMachineClearThisCycle = false;
+    for (ThreadID tid = 0; tid < MaxThreads; ++tid) {
+        badSpecBubbleFromBranchThread[tid] = false;
+        badSpecBubbleFromMachineClearThread[tid] = false;
+    }
+    badSpecRecoveryThisCycle = false;
+    badSpecRecoveryBranchThisCycle = false;
+    badSpecRecoveryMachineClearThisCycle = false;
+    dispatchStallIndex = 0;
+    while (!dispatchResidualStalls.empty()) {
+        dispatchResidualStalls.pop();
+    }
+    setAllStalls(NoStall);
+    for (size_t i = 0; i < fromRename->fetchStallReason.size(); ++i) {
+        StallReason reason = fromRename->fetchStallReason[i];
+        iewStats.fetchStallReason[reason]++;
+        if (isBackendBoundStallReason(reason)) {
+            backendBlockedThisCycle = true;
+        }
+    }
+    for (size_t i = 0; i < fromRename->decodeStallReason.size(); ++i) {
+        StallReason reason = fromRename->decodeStallReason[i];
+        iewStats.decodeStallReason[reason]++;
+        if (isBackendBoundStallReason(reason)) {
+            backendBlockedThisCycle = true;
+        }
+    }
+    for (size_t i = 0; i < fromRename->renameStallReason.size(); ++i) {
+        StallReason reason = fromRename->renameStallReason[i];
+        iewStats.renameStallReason[reason]++;
+        if (isBackendBoundStallReason(reason)) {
+            backendBlockedThisCycle = true;
+        }
+    }
+
     wbNumInst = 0;
     wbCycle = 0;
 
@@ -1447,9 +1870,31 @@ IEW::tick()
     // Check stall and squash signals, dispatch any instructions.
     for (ThreadID tid : *activeThreads) {
         DPRINTF(IEW,"Issue: Processing [tid:%i]\n", tid);
+        blockReason = NoStall;
+
+        if (fromCommit->commitInfo[tid].squash ||
+            fromCommit->commitInfo[tid].robSquashing ||
+            fromCommit->commitInfo[tid].mispredRecovery) {
+            badSpecBubbleThisCycle = true;
+        }
+        if (fromCommit->commitInfo[tid].mispredRecovery) {
+            badSpecRecoveryThisCycle = true;
+            if (fromCommit->commitInfo[tid].mispredRecoveryBranch) {
+                badSpecRecoveryBranchThisCycle = true;
+            } else {
+                badSpecRecoveryMachineClearThisCycle = true;
+            }
+        }
 
         checkSignalsAndUpdate(tid);
         dispatch(tid);
+    }
+
+    finalizeDispatchStalls();
+    for (size_t i = 0; i < dispatchStalls.size(); ++i) {
+        StallReason reason = dispatchStalls[i];
+        iewStats.dispatchStallReason[reason]++;
+        recordBadSpecBubbleReason(reason, i);
     }
 
     if (exeStatus != Squashing) {
@@ -1466,6 +1911,8 @@ IEW::tick()
         // Not the best place for it, but this works (hopefully).
         issueToExecQueue.advance();
     }
+
+    measureFrontendBubbles();
 
     bool broadcast_free_entries = false;
 
@@ -1546,6 +1993,36 @@ IEW::tick()
     if (wroteToTimeBuffer) {
         DPRINTF(Activity, "Activity this cycle.\n");
         cpu->activityThisCycle();
+    }
+}
+
+void
+IEW::recordBadSpecBubbleReason(StallReason reason, size_t slot)
+{
+    if (!isBadSpecBubbleStallReason(reason)) {
+        return;
+    }
+
+    badSpecBubbleThisCycle = true;
+    badSpecBubbleSlotsThisCycle++;
+    if (reason == InstSquashed) {
+        badSpecBubbleSquashedSlotsThisCycle++;
+        if (slot < dispatchStallFromBranch.size() &&
+            dispatchStallFromBranch[slot]) {
+            badSpecBubbleBranchSquashedSlotsThisCycle++;
+            badSpecBubbleFromBranchThisCycle = true;
+        }
+        if (slot >= dispatchStallFromMachineClear.size() ||
+            dispatchStallFromMachineClear[slot] ||
+            !(slot < dispatchStallFromBranch.size() &&
+              dispatchStallFromBranch[slot])) {
+            badSpecBubbleFromMachineClearThisCycle = true;
+        }
+    } else if (isBranchBadSpecBubbleStallReason(reason)) {
+        badSpecBubbleBranchSlotsThisCycle++;
+        badSpecBubbleFromBranchThisCycle = true;
+    } else {
+        badSpecBubbleFromMachineClearThisCycle = true;
     }
 }
 

@@ -291,6 +291,8 @@ class LSQ
 
       protected:
         LSQUnit* lsqUnit() { return &_port; }
+        void trackInflightLoad();
+        void untrackInflightLoad();
         LSQRequest(LSQUnit* port, const DynInstPtr& inst, bool isLoad);
         LSQRequest(LSQUnit* port, const DynInstPtr& inst, bool isLoad,
                 const Addr& addr, const uint32_t& size,
@@ -329,6 +331,7 @@ class LSQ
         release(Flag reason)
         {
             assert(reason == Flag::LSQEntryFreed || reason == Flag::Discarded);
+            untrackInflightLoad();
             if (!isAnyOutstandingRequest()) {
                 delete this;
             } else {
@@ -785,6 +788,8 @@ class LSQ
     /** Returns the total number of stores for a single thread. */
     int numStores(ThreadID tid);
 
+    int anyInflightLoadsNotComplete();
+    bool anyStoreNotExecute();
 
     // hardware transactional memory
 

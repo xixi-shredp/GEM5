@@ -58,6 +58,54 @@ namespace gem5
 namespace o3
 {
 
+/** Stall reasons propagated between pipeline stages. */
+enum StallReason
+{
+    NoStall,
+    IcacheStall,
+    ITlbStall,
+    DTlbStall,
+    BpStall,
+    IntStall,
+    TrapStall,
+    FTQBubble,
+    FetchFragStall,
+    OtherFetchStall,
+    OtherFragStall,
+    SquashStall,
+    FetchBufferInvalid,
+    InstMisPred,
+    InstSquashed,
+    SerializeStall,
+    ScalarLongExecute,
+    VectorLongExecute,
+    InstNotReady,
+    LoadL1Bound,
+    LoadL2Bound,
+    LoadL3Bound,
+    LoadMemBound,
+    StoreL1Bound,
+    StoreL2Bound,
+    StoreL3Bound,
+    StoreMemBound,
+    MemSquashed,
+    MemNotReady,
+    MemCommitRateLimit,
+    Atomic,
+    OtherMemStall,
+    MemDQBandwidth,
+    IntDQBandwidth,
+    FVDQBandwidth,
+    VectorReadyButNotIssued,
+    ScalarReadyButNotIssued,
+    ResumeUnblock,
+    CommitSquash,
+    ROBFull,
+    RegFull,
+    OtherStall,
+    NumStallReasons
+};
+
 /** Struct that defines the information passed from fetch to decode. */
 struct FetchStruct
 {
@@ -67,6 +115,7 @@ struct FetchStruct
     Fault fetchFault;
     InstSeqNum fetchFaultSN;
     bool clearFetchFault;
+    std::vector<StallReason> fetchStallReason;
 };
 
 /** Struct that defines the information passed from decode to rename. */
@@ -75,6 +124,8 @@ struct DecodeStruct
     int size;
 
     DynInstPtr insts[MaxWidth];
+    std::vector<StallReason> fetchStallReason;
+    std::vector<StallReason> decodeStallReason;
 };
 
 /** Struct that defines the information passed from rename to IEW. */
@@ -83,6 +134,9 @@ struct RenameStruct
     int size;
 
     DynInstPtr insts[MaxWidth];
+    std::vector<StallReason> fetchStallReason;
+    std::vector<StallReason> decodeStallReason;
+    std::vector<StallReason> renameStallReason;
 };
 
 /** Struct that defines the information passed from IEW to commit. */
@@ -135,11 +189,15 @@ struct TimeStruct
         bool controlMispredict = false;
         bool branchMispredict = false;
         bool branchTaken = false;
+        StallReason blockReason = NoStall;
     };
 
     DecodeComm decodeInfo[MaxThreads];
 
-    struct RenameComm {};
+    struct RenameComm
+    {
+        StallReason blockReason = NoStall;
+    };
 
     RenameComm renameInfo[MaxThreads];
 
@@ -158,6 +216,7 @@ struct TimeStruct
         unsigned dispatched = 0;
         bool usedIQ = false;
         bool usedLSQ = false;
+        StallReason blockReason = NoStall;
     };
 
     IewComm iewInfo[MaxThreads];
@@ -206,6 +265,8 @@ struct TimeStruct
 
         bool squash = false; // *F, D, R, I
         bool robSquashing = false; // *F, D, R, I
+        bool mispredRecovery = false;       // *F
+        bool mispredRecoveryBranch = false; // *F
 
         /// Rename should re-read number of free rob entries
         bool usedROB = false; // *R
@@ -236,6 +297,32 @@ struct TimeStruct
     bool renameUnblock[MaxThreads];
     bool iewBlock[MaxThreads];
     bool iewUnblock[MaxThreads];
+};
+
+struct StallSignals
+{
+    StallSignals()
+    {
+        for (int i = 0; i < MaxThreads; ++i) {
+            blockFetch[i] = false;
+            blockDecode[i] = false;
+            blockRename[i] = false;
+            blockIEW[i] = false;
+            fetchBlockReason[i] = NoStall;
+            decodeBlockReason[i] = NoStall;
+            renameBlockReason[i] = NoStall;
+            iewBlockReason[i] = NoStall;
+        }
+    }
+
+    bool blockFetch[MaxThreads];
+    bool blockDecode[MaxThreads];
+    bool blockRename[MaxThreads];
+    bool blockIEW[MaxThreads];
+    StallReason fetchBlockReason[MaxThreads];
+    StallReason decodeBlockReason[MaxThreads];
+    StallReason renameBlockReason[MaxThreads];
+    StallReason iewBlockReason[MaxThreads];
 };
 
 /**

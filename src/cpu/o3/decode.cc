@@ -81,6 +81,17 @@ std::string Decode::DecodeStats::statusDefinitions[ThreadStatusMax] = {
 };
 // clang-format on
 
+static void
+mergeStallReasons(std::vector<StallReason> &dst,
+                  const std::vector<StallReason> &src)
+{
+    for (size_t i = 0; i < dst.size() && i < src.size(); ++i) {
+        if (dst[i] == NoStall) {
+            dst[i] = src[i];
+        }
+    }
+}
+
 Decode::Decode(CPU *_cpu, const BaseO3CPUParams &params)
     : cpu(_cpu),
       renameToDecodeDelay(params.renameToDecodeDelay),
@@ -98,6 +109,7 @@ Decode::Decode(CPU *_cpu, const BaseO3CPUParams &params)
 
     // @todo: Make into a parameter
     skidBufferMax = (fetchToDecodeDelay + 1) *  params.decodeWidth;
+    decodeStalls.resize(decodeWidth, NoStall);
     for (int tid = 0; tid < MaxThreads; tid++) {
         stalls[tid] = {false};
         decodeStatus[tid] = Idle;
@@ -265,6 +277,13 @@ Decode::block(ThreadID tid)
 {
     DPRINTF(Decode, "[tid:%i] Blocking.\n", tid);
 
+    if (blockReason == NoStall) {
+        blockReason = OtherStall;
+    }
+    stallSig->blockFetch[tid] = true;
+    stallSig->fetchBlockReason[tid] = blockReason;
+    toFetch->decodeInfo[tid].blockReason = blockReason;
+
     // Add the current inputs to the skid buffer so they can be
     // reprocessed when this stage unblocks.
     skidInsert(tid);
@@ -296,6 +315,9 @@ Decode::unblock(ThreadID tid)
     if (skidBuffer[tid].empty()) {
         DPRINTF(Decode, "[tid:%i] Done unblocking.\n", tid);
         toFetch->decodeUnblock[tid] = true;
+        toFetch->decodeInfo[tid].blockReason = NoStall;
+        stallSig->blockFetch[tid] = false;
+        stallSig->fetchBlockReason[tid] = NoStall;
         wroteToTimeBuffer = true;
 
         decodeStatus[tid] = Running;
@@ -332,6 +354,10 @@ Decode::squash(const DynInstPtr &inst, bool control_miss, ThreadID tid)
                                            inst->isUncondCtrl();
 
     toFetch->decodeInfo[tid].squashInst = inst;
+    toFetch->decodeInfo[tid].blockReason = InstMisPred;
+    stallSig->blockFetch[tid] = true;
+    stallSig->fetchBlockReason[tid] = InstMisPred;
+    blockReason = InstMisPred;
 
     InstSeqNum squash_seq_num = inst->seqNum;
 
@@ -494,11 +520,15 @@ Decode::readStallSignals(ThreadID tid)
 {
     if (fromRename->renameBlock[tid]) {
         stalls[tid].rename = true;
+        blockReason = fromRename->renameInfo[tid].blockReason == NoStall
+                          ? OtherStall
+                          : fromRename->renameInfo[tid].blockReason;
     }
 
     if (fromRename->renameUnblock[tid]) {
         assert(stalls[tid].rename);
         stalls[tid].rename = false;
+        blockReason = NoStall;
     }
 }
 
@@ -566,12 +596,16 @@ Decode::tick()
     bool status_change = false;
 
     toRenameIndex = 0;
+    blockReason = NoStall;
+    setAllStalls(NoStall);
+    toRename->fetchStallReason = fromFetch->fetchStallReason;
 
     sortInsts();
 
     //Check stall and squash signals.
     for (ThreadID tid : *activeThreads) {
         DPRINTF(Decode,"Processing [tid:%i]\n",tid);
+        blockReason = NoStall;
         status_change =  checkSignalsAndUpdate(tid) || status_change;
 
         decode(status_change, tid);
@@ -586,6 +620,8 @@ Decode::tick()
 
         cpu->activityThisCycle();
     }
+
+    toRename->decodeStallReason = decodeStalls;
 }
 
 void
@@ -645,6 +681,9 @@ Decode::decodeInsts(ThreadID tid)
                 " early.\n",tid);
         // Should I change the status to idle?
         ++stats.status[Idle];
+        if (!fromFetch->fetchStallReason.empty()) {
+            mergeStallReasons(decodeStalls, fromFetch->fetchStallReason);
+        }
         return;
     } else if (decodeStatus[tid] == Unblocking) {
         DPRINTF(Decode, "[tid:%i] Unblocking, removing insts from skid "
@@ -657,6 +696,7 @@ Decode::decodeInsts(ThreadID tid)
     std::queue<DynInstPtr>
         &insts_to_decode = decodeStatus[tid] == Unblocking ?
         skidBuffer[tid] : insts[tid];
+    std::queue<StallReason> slot_stalls;
 
     DPRINTF(Decode, "[tid:%i] Sending instruction to rename.\n",tid);
 
@@ -676,6 +716,7 @@ Decode::decodeInsts(ThreadID tid)
                     tid, inst->seqNum, inst->pcState());
 
             ++stats.squashedInsts;
+            slot_stalls.push(InstSquashed);
 
             --insts_available;
 
@@ -693,6 +734,9 @@ Decode::decodeInsts(ThreadID tid)
         // This current instruction is valid, so add it into the decode
         // queue.  The next instruction may not be valid, so check to
         // see if branches were predicted correctly.
+        if (static_cast<size_t>(toRenameIndex) < decodeStalls.size()) {
+            decodeStalls[toRenameIndex] = NoStall;
+        }
         toRename->insts[toRenameIndex] = inst;
 
         ++(toRename->size);
@@ -730,6 +774,8 @@ Decode::decodeInsts(ThreadID tid)
 
                 // Might want to set some sort of boolean and just do
                 // a check at the end
+                slot_stalls.push(InstMisPred);
+                blockReason = InstMisPred;
                 squash(inst, false, inst->threadNumber);
 
                 DPRINTF(Decode,
@@ -747,13 +793,53 @@ Decode::decodeInsts(ThreadID tid)
     // If we didn't process all instructions, then we will need to block
     // and put all those instructions into the skid buffer.
     if (!insts_to_decode.empty()) {
+        if (blockReason == NoStall) {
+            blockReason = OtherFragStall;
+        }
         block(tid);
+    }
+
+    size_t stall_index = toRenameIndex;
+    while (!slot_stalls.empty() && stall_index < decodeStalls.size()) {
+        decodeStalls[stall_index++] = slot_stalls.front();
+        slot_stalls.pop();
+    }
+
+    if (blockReason != NoStall && stall_index < decodeStalls.size()) {
+        setStallsFrom(stall_index, blockReason);
+    } else if (toRenameIndex > 0 && !decodeStalls.empty() &&
+               decodeStalls[0] == NoStall) {
+        for (size_t i = 0; i < decodeStalls.size(); ++i) {
+            if (i < toRenameIndex) {
+                decodeStalls[i] = NoStall;
+            } else if (i < fromFetch->fetchStallReason.size()) {
+                decodeStalls[i] = fromFetch->fetchStallReason[i];
+            } else {
+                decodeStalls[i] = OtherFragStall;
+            }
+        }
     }
 
     // Record that decode has written to the time buffer for activity
     // tracking.
     if (toRenameIndex) {
         wroteToTimeBuffer = true;
+    }
+}
+
+void
+Decode::setAllStalls(StallReason decodeStall)
+{
+    for (auto &reason : decodeStalls) {
+        reason = decodeStall;
+    }
+}
+
+void
+Decode::setStallsFrom(size_t first, StallReason decodeStall)
+{
+    for (size_t i = first; i < decodeStalls.size(); ++i) {
+        decodeStalls[i] = decodeStall;
     }
 }
 
