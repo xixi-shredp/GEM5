@@ -984,6 +984,14 @@ LSQUnit::squash(const InstSeqNum &squashed_num)
     }
 
     stats.lqAvgOccupancy = queueOccupancy(loadQueue);
+    
+    for (auto it = inflightLoads.begin(); it != inflightLoads.end();) {
+        if ((*it)->instruction()->isSquashed()) {
+            it = inflightLoads.erase(it);
+        } else {
+            ++it;
+        }
+    }
 
     // hardware transactional memory
     // scan load queue (from oldest to youngest) for most recent valid htmUid

@@ -204,7 +204,7 @@ class ROB
     /** Squashes all instructions younger than the given sequence number for
      *  the specific thread.
      */
-    void squash(InstSeqNum squash_num, ThreadID tid);
+    void squash(InstSeqNum squash_num, ThreadID tid, bool fromBranch);
 
     /** Updates the head instruction with the new oldest instruction. */
     void updateHead();
@@ -278,6 +278,9 @@ class ROB
 
     /** Number of instructions in the ROB. */
     unsigned numEntries;
+
+    /** Source of the in-progress squash for bad-spec slot attribution. */
+    bool squashFromBranch[MaxThreads];
 
     /** Entries Per Thread */
     unsigned threadEntries[MaxThreads];

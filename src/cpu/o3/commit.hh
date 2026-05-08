@@ -131,6 +131,8 @@ class Commit
     /** Mark the thread as processing a trap. */
     void processTrapEvent(ThreadID tid);
 
+    StallSignals *stallSig = nullptr;
+
   public:
     /** Construct a Commit with the given parameters. */
     Commit(CPU *_cpu, const BaseO3CPUParams &params);
@@ -157,6 +159,12 @@ class Commit
 
     /** Sets the pointer to the IEW stage. */
     void setIEWStage(IEW *iew_stage);
+
+    void
+    setStallSignals(StallSignals *stall_signals)
+    {
+        stallSig = stall_signals;
+    }
 
     /** The pointer to the IEW stage. Used solely to ensure that
      * various events (traps, interrupts, syscalls) do not occur until
@@ -312,6 +320,8 @@ class Commit
     /** Sets the PC of a specific thread. */
     void pcState(const PCStateBase &val, ThreadID tid) { set(pc[tid], val); }
 
+    auto& getStats() { return stats; }
+
   private:
     /** Time buffer interface. */
     TimeBuffer<TimeStruct> *timeBuffer;
@@ -392,6 +402,9 @@ class Commit
      *  instructions to get from the rename instruction queue.
      */
     const unsigned renameWidth;
+
+    /** Issue width, used for top-down recovery slot accounting. */
+    const unsigned issueWidth;
 
     /** Commit width, in instructions. */
     const unsigned commitWidth;
@@ -495,7 +508,42 @@ class Commit
 
         /** Number of cycles where the commit bandwidth limit is reached. */
         statistics::Scalar commitEligibleSamples;
+
+        /** Unutilized issue-pipeline slots due to recovery from
+          * earlier miss-speculation.
+          */
+        statistics::Scalar recoveryBubbles;
+        /** Recovery bubbles caused by branch misprediction. */
+        statistics::Scalar branchRecoveryBubbles;
+        /** Recovery bubbles caused by machine clears. */
+        statistics::Scalar machineClearRecoveryBubbles;
+        /** Non-issued bad speculation bubbles. */
+        statistics::Scalar badSpecNonIssueBubbles;
+        /** Non-issued bad speculation bubbles caused by branch recovery. */
+        statistics::Scalar branchBadSpecNonIssueBubbles;
+        /** Non-issued bad speculation bubbles caused by machine clears. */
+        statistics::Scalar machineClearBadSpecNonIssueBubbles;
+        /** First-issued wrong-path slots caused by branch misprediction. */
+        statistics::Scalar branchWrongPathFirstIssued;
+        /** First-issued wrong-path slots caused by machine clears. */
+        statistics::Scalar machineClearWrongPathFirstIssued;
+
+        /** Number of squash due to branch */
+        statistics::Scalar squashDueToBranch;
+        /** Number of squash due to order violation */
+        statistics::Scalar squashDueToOrderViolation;
+        /** Number of squash due to trap */
+        statistics::Scalar squashDueToTrap;
+        /** Number of squash due to TC */
+        statistics::Scalar squashDueToTC;
+        /** Number of squash due to squash after */
+        statistics::Scalar squashDueToSquashAfter;
+        /** Total number of squash */
+        statistics::Formula totalSquash;
     } stats;
+
+    bool badSpecRecovery[MaxThreads] = {};
+    bool badSpecRecoveryFromBranch[MaxThreads] = {};
 };
 
 } // namespace o3

@@ -109,6 +109,7 @@ ROB::resetState()
         squashIt[tid] = instList[tid].end();
         squashedSeqNum[tid] = 0;
         doneSquashing[tid] = true;
+        squashFromBranch[tid] = false;
     }
     numInstsInROB = 0;
 
@@ -333,17 +334,20 @@ ROB::doSquash(ThreadID tid)
          (*squashIt[tid])->seqNum > squashedSeqNum[tid];
          ++numSquashed)
     {
+        DynInstPtr squashed_inst = *squashIt[tid];
+
         DPRINTF(ROB, "[tid:%i] Squashing instruction PC %s, seq num %i.\n",
-                (*squashIt[tid])->threadNumber,
-                (*squashIt[tid])->pcState(),
-                (*squashIt[tid])->seqNum);
+                squashed_inst->threadNumber, squashed_inst->pcState(),
+                squashed_inst->seqNum);
 
         // Mark the instruction as squashed, and ready to commit so that
         // it can drain out of the pipeline.
-        (*squashIt[tid])->setSquashed();
+        if (squashed_inst->firstIssue != -1) {
+            cpu->recordBadSpecWrongPathIssue(squashFromBranch[tid]);
+        }
+        squashed_inst->setSquashed();
 
-        (*squashIt[tid])->setCanCommit();
-
+        squashed_inst->setCanCommit();
 
         if (squashIt[tid] == instList[tid].begin()) {
             DPRINTF(ROB, "Reached head of instruction list while "
@@ -449,10 +453,11 @@ ROB::updateTail()
     }
 }
 
-
 void
-ROB::squash(InstSeqNum squash_num, ThreadID tid)
+ROB::squash(InstSeqNum squash_num, ThreadID tid, bool fromBranch)
 {
+    squashFromBranch[tid] = fromBranch;
+
     if (isEmpty(tid)) {
         DPRINTF(ROB, "Does not need to squash due to being empty "
                 "[sn:%llu]\n",

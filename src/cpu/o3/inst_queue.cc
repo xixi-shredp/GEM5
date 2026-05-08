@@ -41,6 +41,7 @@
 
 #include "cpu/o3/inst_queue.hh"
 
+#include <algorithm>
 #include <limits>
 #include <vector>
 
@@ -226,10 +227,12 @@ InstructionQueue::InstructionQueue(CPU *cpu_ptr, IEW *iew_ptr,
       iewStage(iew_ptr),
       iqs(params.instQueues),
       numThreads(params.numThreads),
+      activeThreads(nullptr),
       totalWidth(params.issueWidth),
       commitToIEWDelay(params.commitToIEWDelay),
       iqStats(cpu, totalWidth),
-      iqIOStats(cpu)
+      iqIOStats(cpu),
+      backendStats(cpu)
 {
     const auto &reg_classes = params.isa[0]->regClasses();
     // Set the number of total physical registers
@@ -281,6 +284,8 @@ InstructionQueue::IQStats::IQStats(CPU *cpu, const unsigned &total_width)
                "Number of non-speculative instructions added to the IQ"),
       ADD_STAT(instsIssued, statistics::units::Count::get(),
                "Number of instructions issued"),
+      ADD_STAT(instsFirstIssued, statistics::units::Count::get(),
+               "Number of instructions issued for the first time"),
       ADD_STAT(intInstsIssued, statistics::units::Count::get(),
                "Number of integer instructions issued"),
       ADD_STAT(floatInstsIssued, statistics::units::Count::get(),
@@ -326,6 +331,8 @@ InstructionQueue::IQStats::IQStats(CPU *cpu, const unsigned &total_width)
 
     instsIssued
         .prereq(instsIssued);
+
+    instsFirstIssued.prereq(instsFirstIssued);
 
     intInstsIssued
         .prereq(intInstsIssued);
@@ -487,6 +494,64 @@ InstructionQueue::IQIOStats::IQIOStats(statistics::Group *parent)
         .flags(total);
 }
 
+InstructionQueue::BackendBoundStats::BackendBoundStats(
+    statistics::Group* parent)
+    : statistics::Group(parent),
+      ADD_STAT(exec_stall_cycle, "SUM(OpsExecuted[= FEW])"),
+      ADD_STAT(memstall_any_load,
+               "Cycles with no uops executed and at least X in-flight load that is not completed yet"),
+      ADD_STAT(memstall_any_store, "Cycles with few uops executed and no more stores can be issued"),
+      ADD_STAT(memstall_l1miss,
+               "Cycles with no uops executed and at least X in-flight load that has missed the L1-cache"),
+      ADD_STAT(memstall_l2miss,
+               "Cycles with no uops executed and at least X in-flight load that has missed the L2-cache"),
+      ADD_STAT(memstall_l3miss,
+               "Cycles with no uops executed and at least X in-flight load that has missed the L3-cache"),
+      ADD_STAT(memstall_l1miss_s,
+               "Cycles with no uops executed and at least X in-flight scalar load that has missed the L1-cache"),
+      ADD_STAT(memstall_l1miss_vus,
+               "Cycles with no uops executed and at least X in-flight vector united strided load "
+               "that has missed the L1-cache"),
+      ADD_STAT(memstall_l1miss_vs,
+               "Cycles with no uops executed and at least X in-flight vector strided load "
+               "that has missed the L1-cache"),
+      ADD_STAT(memstall_l1miss_vi,
+               "Cycles with no uops executed and at least X in-flight vector indexed load "
+               "that has missed the L1-cache"),
+      ADD_STAT(memstall_l2miss_s,
+               "Cycles with no uops executed and at least X in-flight scalar load that has missed the L2-cache"),
+      ADD_STAT(memstall_l2miss_vus,
+               "Cycles with no uops executed and at least X in-flight vector united strided load "
+               "that has missed the L2-cache"),
+      ADD_STAT(memstall_l2miss_vs,
+               "Cycles with no uops executed and at least X in-flight vector strided load "
+               "that has missed the L2-cache"),
+      ADD_STAT(memstall_l2miss_vi,
+               "Cycles with no uops executed and at least X in-flight vector indexed load "
+               "that has missed the L2-cache"),
+      ADD_STAT(memstall_l3miss_s,
+               "Cycles with no uops executed and at least X in-flight scalar load that has missed the L3-cache"),
+      ADD_STAT(memstall_l3miss_vus,
+               "Cycles with no uops executed and at least X in-flight vector united strided load "
+               "that has missed the L3-cache"),
+      ADD_STAT(memstall_l3miss_vs,
+               "Cycles with no uops executed and at least X in-flight vector strided load "
+               "that has missed the L3-cache"),
+      ADD_STAT(memstall_l3miss_vi,
+               "Cycles with no uops executed and at least X in-flight vector indexed load "
+               "that has missed the L3-cache"),
+      ADD_STAT(memstall_anymiss_s,
+               "Cycles with no uops executed and at least X in-flight scalar load that is not completed"),
+      ADD_STAT(memstall_anymiss_vus,
+               "Cycles with no uops executed and at least X in-flight vector united strided load "
+               "that is not completed"),
+      ADD_STAT(memstall_anymiss_vs,
+               "Cycles with no uops executed and at least X in-flight vector strided load that is not completed"),
+      ADD_STAT(memstall_anymiss_vi,
+               "Cycles with no uops executed and at least X in-flight vector indexed load that is not completed")
+{
+}
+
 void
 InstructionQueue::resetState()
 {
@@ -530,6 +595,7 @@ InstructionQueue::resetState()
 void
 InstructionQueue::setActiveThreads(list<ThreadID> *at_ptr)
 {
+    activeThreads = at_ptr;
     for (auto iq : iqs) {
         iq->setActiveThreads(at_ptr);
     }
@@ -650,6 +716,62 @@ InstructionQueue::hasReadyInsts()
     }
 
     return false;
+}
+
+bool
+InstructionQueue::hasInFlightInsts() const
+{
+    assert(activeThreads != nullptr);
+
+    auto is_active_thread = [this](ThreadID tid) {
+        return std::find(activeThreads->begin(), activeThreads->end(), tid) !=
+               activeThreads->end();
+    };
+    auto is_active_inst = [&is_active_thread](const DynInstPtr &inst) {
+        return inst && is_active_thread(inst->threadNumber);
+    };
+
+    for (const auto &entry : nonSpecInsts) {
+        if (entry.second && is_active_thread(entry.second->threadNumber)) {
+            return true;
+        }
+    }
+    for (const auto &inst : deferredMemInsts) {
+        if (is_active_inst(inst)) {
+            return true;
+        }
+    }
+    for (const auto &inst : blockedMemInsts) {
+        if (is_active_inst(inst)) {
+            return true;
+        }
+    }
+    for (const auto &inst : retryMemInsts) {
+        if (is_active_inst(inst)) {
+            return true;
+        }
+    }
+
+    for (ThreadID tid : *activeThreads) {
+        for (const auto &inst : instList[tid]) {
+            if (!inst->isIssued()) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+void
+InstructionQueue::recordBypassIssue(const DynInstPtr &inst)
+{
+    const bool first_issue = inst->firstIssue == -1;
+    if (first_issue) {
+        inst->firstIssue = curTick();
+        iqStats.instsFirstIssued++;
+    }
+    iewStage->recordIssueStageSlots(1, false);
 }
 
 IQUnit *
@@ -872,10 +994,15 @@ InstructionQueue::scheduleReadyInsts()
     // This will avoid trying to schedule a certain op class if there are no
     // FUs that handle it.
     int total_issued = 0;
+    bool fu_busy = false;
     ListOrderIt order_it = listOrder.begin();
     ListOrderIt order_end_it = listOrder.end();
+    const unsigned already_used_slots =
+        iewStage->getIssueStageSlotsUsedThisCycle();
+    const unsigned issue_slots_available =
+        totalWidth > already_used_slots ? totalWidth - already_used_slots : 0;
 
-    while (total_issued < totalWidth && order_it != order_end_it) {
+    while (total_issued < issue_slots_available && order_it != order_end_it) {
         OpClass op_class = (*order_it).queueType;
 
         assert(!readyInsts[op_class].empty());
@@ -993,8 +1120,13 @@ InstructionQueue::scheduleReadyInsts()
             issuing_inst->issueTick = curTick() - issuing_inst->fetchTick;
 #endif
 
-            if (issuing_inst->firstIssue == -1)
+            const bool first_issue = issuing_inst->firstIssue == -1;
+            if (first_issue) {
                 issuing_inst->firstIssue = curTick();
+            }
+            if (first_issue) {
+                iqStats.instsFirstIssued++;
+            }
 
             if (!issuing_inst->isMemRef()) {
                 // Memory instructions can not be freed from the IQ until they
@@ -1008,9 +1140,105 @@ InstructionQueue::scheduleReadyInsts()
             iqStats.issuedInstType[tid][op_class]++;
         } else {
             assert(idx == FUPool::NoFreeFU);
+            fu_busy = true;
             iqStats.statFuBusy[op_class]++;
             iqStats.fuBusy[tid]++;
             ++order_it;
+        }
+    }
+
+    auto lsq = &iewStage->ldstQueue;
+    bool store_stall = false;
+    int misslevel = 0;
+    bool iq_waiting = false;
+    const unsigned used_slots = total_issued + already_used_slots;
+    const unsigned unused_slots =
+        totalWidth > used_slots ? totalWidth - used_slots : 0;
+    const unsigned bad_spec_slots =
+        iewStage->getBadSpecBubbleSlotsThisCycle(unused_slots);
+    const unsigned backend_unused_slots =
+        unused_slots > bad_spec_slots ? unused_slots - bad_spec_slots : 0;
+    if (backend_unused_slots > 0) {
+        store_stall = lsq->anyStoreNotExecute();
+        misslevel = lsq->anyInflightLoadsNotComplete();
+        iq_waiting = hasInFlightInsts();
+    }
+
+    bool backend_stall =
+        backend_unused_slots > 0 &&
+        (fu_busy || store_stall || misslevel != 0 || iq_waiting);
+    iewStage->recordIssueStageSlots(total_issued, backend_stall);
+    bool count_backend_stall =
+        backend_stall && !iewStage->isBadSpecRecoveryThisCycle();
+
+    if (count_backend_stall) {
+        backendStats.exec_stall_cycle += backend_unused_slots;
+        if (store_stall) {
+            backendStats.memstall_any_store += backend_unused_slots;
+        }
+    }
+    if (count_backend_stall && misslevel != 0) {
+        backendStats.memstall_any_load += backend_unused_slots;
+
+        int l1_code = misslevel & 0xf;
+        misslevel >>= 4;
+        int l2_code = misslevel & 0xf;
+        misslevel >>= 4;
+        int l3_code = misslevel & 0xf;
+        misslevel >>= 4;
+        int any_code = misslevel & 0xf;
+
+        bool l1_miss  = l1_code  != 0;
+        bool l2_miss  = l2_code  != 0 && l1_miss;
+        bool l3_miss  = l3_code  != 0 && l2_miss;
+        bool any_miss = any_code != 0;
+
+        if (l1_miss) {
+            backendStats.memstall_l1miss += backend_unused_slots;
+            if (l1_code == 0x1) {
+                backendStats.memstall_l1miss_s += backend_unused_slots;
+            } else if (l1_code == 0x2) {
+                backendStats.memstall_l1miss_vus += backend_unused_slots;
+            } else if (l1_code == 0x4) {
+                backendStats.memstall_l1miss_vs += backend_unused_slots;
+            } else if (l1_code == 0x8) {
+                backendStats.memstall_l1miss_vi += backend_unused_slots;
+            }
+        }
+        if (l2_miss) {
+            backendStats.memstall_l2miss += backend_unused_slots;
+            if (l2_code == 0x1) {
+                backendStats.memstall_l2miss_s += backend_unused_slots;
+            } else if (l2_code == 0x2) {
+                backendStats.memstall_l2miss_vus += backend_unused_slots;
+            } else if (l2_code == 0x4) {
+                backendStats.memstall_l2miss_vs += backend_unused_slots;
+            } else if (l2_code == 0x8) {
+                backendStats.memstall_l2miss_vi += backend_unused_slots;
+            }
+        }
+        if (l3_miss) {
+            backendStats.memstall_l3miss += backend_unused_slots;
+            if (l3_code == 0x1) {
+                backendStats.memstall_l3miss_s += backend_unused_slots;
+            } else if (l3_code == 0x2) {
+                backendStats.memstall_l3miss_vus += backend_unused_slots;
+            } else if (l3_code == 0x4) {
+                backendStats.memstall_l3miss_vs += backend_unused_slots;
+            } else if (l3_code == 0x8) {
+                backendStats.memstall_l3miss_vi += backend_unused_slots;
+            }
+        }
+        if (any_miss) {
+            if (any_code == 0x1) {
+                backendStats.memstall_anymiss_s += backend_unused_slots;
+            } else if (any_code == 0x2) {
+                backendStats.memstall_anymiss_vus += backend_unused_slots;
+            } else if (any_code == 0x4) {
+                backendStats.memstall_anymiss_vs += backend_unused_slots;
+            } else if (any_code == 0x8) {
+                backendStats.memstall_anymiss_vi += backend_unused_slots;
+            }
         }
     }
 

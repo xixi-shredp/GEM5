@@ -146,6 +146,12 @@ class Rename
     /** Sets pointer to IEW stage. Used only for initialization. */
     void setIEWStage(IEW *iew_stage) { iew_ptr = iew_stage; }
 
+    void
+    setStallSignals(StallSignals *stall_signals)
+    {
+        stallSig = stall_signals;
+    }
+
     /** Sets pointer to commit stage. Used only for initialization. */
     void
     setCommitStage(Commit *commit_stage)
@@ -285,6 +291,9 @@ class Rename
     /** Checks the signals and updates the status. */
     bool checkSignalsAndUpdate(ThreadID tid);
 
+    void setAllStalls(StallReason renameStall);
+    void setStallsFrom(size_t first, StallReason renameStall);
+
     /** Either serializes on the next instruction available in the InstQueue,
      * or records that it must serialize on the next instruction to enter
      * rename.
@@ -326,6 +335,8 @@ class Rename
 
     /** Pointer to CPU. */
     CPU *cpu;
+
+    StallSignals *stallSig = nullptr;
 
     /** Pointer to main time buffer used for backwards communication. */
     TimeBuffer<TimeStruct> *timeBuffer;
@@ -423,6 +434,9 @@ class Rename
 
     /** Tracks which stages are telling decode to stall. */
     Stalls stalls[MaxThreads];
+
+    std::vector<StallReason> renameStalls;
+    StallReason blockReason = NoStall;
 
     /** The serialize instruction that rename has stalled on. */
     DynInstPtr serializeInst[MaxThreads];
