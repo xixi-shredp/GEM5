@@ -33,6 +33,7 @@ SimObject('Prefetcher.py', sim_objects=[
     'IPOPMultiPrefetcher', 'BanditPrefetcher', 'ReSemblePrefetcher',
         'QueuedPrefetcher',
     'StridePrefetcherHashedSetAssociative', 'StridePrefetcher',
+    'AMDContiguousStreamPrefetcher',
     'SmsPrefetcher', 'TaggedPrefetcher', 'IndirectMemoryPrefetcher',
     'SignaturePathPrefetcher', 'SignaturePathPrefetcherV2',
     'AccessMapPatternMatching', 'AMPMPrefetcher',
@@ -40,8 +41,9 @@ SimObject('Prefetcher.py', sim_objects=[
     'IrregularStreamBufferPrefetcher', 'SlimAMPMPrefetcher',
     'BOPPrefetcher', 'SBOOEPrefetcher', 'STeMSPrefetcher',
     'BingoPrefetcher', 'BertiPrefetcher', 'KairosPrefetcher',
-    'StreamlinePrefetcher', 'AMDRegionTypePrefetcher'
-    'PIFPrefetcher', 'FetchDirectedPrefetcher',
+    'StreamlinePrefetcher', 'AMDRegionTypePrefetcher',
+    'AMDRIPRegionPrefetcher', 'AMDRegionStreamPrefetchers'
+    'PIFPrefetcher', 'FetchDirectedPrefetcher'
     ])
 
 DebugFlag('BertiPrefetcher')
@@ -64,6 +66,9 @@ Source('queued.cc')
 Source('resemble.cc')
 Source('sbooe.cc')
 Source('sms.cc')
+Source('amd_contiguous_stream.cc')
+Source('amd_rip_region.cc')
+Source('amd_region_stream.cc')
 Source('signature_path.cc')
 Source('signature_path_v2.cc')
 Source('slim_ampm.cc')
