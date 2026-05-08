@@ -33,6 +33,8 @@
 #include <functional>
 #include <list>
 #include <memory>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "base/types.hh"
@@ -48,11 +50,35 @@ namespace gem5
 class InfiniteTags : public BaseTags
 {
   private:
-    std::list<CacheBlk> blocks;
-    std::list<std::unique_ptr<uint8_t[]>> blockData;
+    using Blocks = std::list<CacheBlk>;
+    using BlockIterator = Blocks::iterator;
+
+    struct PairHash
+    {
+        template <class T1, class T2>
+        std::size_t
+        operator()(const std::pair<T1, T2> &p) const
+        {
+            return std::hash<T1>{}(p.first) ^ (std::hash<T2>{}(p.second) << 1);
+        }
+    };
+
+    using TagHashKey = std::pair<Addr, bool>;
+    using TagHash = std::unordered_map<TagHashKey, BlockIterator, PairHash>;
+
+    static constexpr std::size_t BlockDataChunkBytes = 256 * 1024;
+
+    const std::size_t blockDataChunkBlocks;
+    std::size_t nextBlockDataOffset;
+
+    Blocks blocks;
+    std::vector<std::unique_ptr<uint8_t[]>> blockDataChunks;
+    TagHash blockMap;
+    std::vector<BlockIterator> invalidBlocks;
 
     void attachBlockData(CacheBlk &blk);
     void registerBlock(CacheBlk &blk);
+    TagHashKey makeTagHashKey(const CacheBlk::KeyType &key) const;
 
   public:
     PARAMS(InfiniteTags);
@@ -69,6 +95,7 @@ class InfiniteTags : public BaseTags
     Addr extractTag(const Addr addr) const override;
     void insertBlock(const PacketPtr pkt, CacheBlk *blk) override;
     void invalidate(CacheBlk *blk) override;
+    void moveBlock(CacheBlk *src_blk, CacheBlk *dest_blk) override;
     Addr regenerateBlkAddr(const CacheBlk *blk) const override;
     bool anyBlk(std::function<bool(CacheBlk &)> visitor) override;
 };

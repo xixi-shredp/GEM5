@@ -28,6 +28,7 @@
 
 #include "mem/cache/tags/infinite_tags.hh"
 
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 
@@ -36,8 +37,15 @@
 namespace gem5
 {
 
-InfiniteTags::InfiniteTags(const Params &p) : BaseTags(p)
-{}
+InfiniteTags::InfiniteTags(const Params &p)
+    : BaseTags(p),
+      blockDataChunkBlocks(
+          std::max<std::size_t>(1, BlockDataChunkBytes / blkSize)),
+      nextBlockDataOffset(0)
+{
+    blockMap.reserve(numBlocks);
+    invalidBlocks.reserve(numBlocks);
+}
 
 void
 InfiniteTags::tagsInit()
@@ -46,8 +54,15 @@ InfiniteTags::tagsInit()
 void
 InfiniteTags::attachBlockData(CacheBlk &blk)
 {
-    blockData.emplace_back(new uint8_t[blkSize]);
-    blk.data = blockData.back().get();
+    if (blockDataChunks.empty() ||
+        nextBlockDataOffset == blockDataChunkBlocks) {
+        blockDataChunks.emplace_back(
+            new uint8_t[blockDataChunkBlocks * blkSize]);
+        nextBlockDataOffset = 0;
+    }
+
+    blk.data = blockDataChunks.back().get() + (nextBlockDataOffset * blkSize);
+    ++nextBlockDataOffset;
 }
 
 void
@@ -56,16 +71,23 @@ InfiniteTags::registerBlock(CacheBlk &blk)
     blk.registerTagExtractor([this](Addr addr) { return extractTag(addr); });
 }
 
+InfiniteTags::TagHashKey
+InfiniteTags::makeTagHashKey(const CacheBlk::KeyType &key) const
+{
+    return std::make_pair(extractTag(key.address), key.secure);
+}
+
 CacheBlk *
 InfiniteTags::findBlock(const CacheBlk::KeyType &key) const
 {
-    for (CacheBlk &blk : const_cast<std::list<CacheBlk> &>(blocks)) {
-        if (blk.match(key)) {
-            return &blk;
-        }
+    const auto it = blockMap.find(makeTagHashKey(key));
+    if (it == blockMap.end()) {
+        return nullptr;
     }
 
-    return nullptr;
+    CacheBlk &blk = *it->second;
+    assert(blk.match(key));
+    return &blk;
 }
 
 ReplaceableEntry *
@@ -89,13 +111,15 @@ InfiniteTags::findVictim(const CacheBlk::KeyType &key, const std::size_t size,
                          std::vector<CacheBlk *> &evict_blks,
                          const uint64_t partition_id)
 {
-    for (auto it = blocks.begin(); it != blocks.end(); ++it) {
-        if (!it->isValid()) {
-            if (it != blocks.begin()) {
-                blocks.splice(blocks.begin(), blocks, it);
-            }
-            return &blocks.front();
+    if (!invalidBlocks.empty()) {
+        const auto victim = invalidBlocks.back();
+        invalidBlocks.pop_back();
+
+        if (victim != blocks.begin()) {
+            blocks.splice(blocks.begin(), blocks, victim);
         }
+
+        return &blocks.front();
     }
 
     blocks.emplace_front();
@@ -110,25 +134,20 @@ CacheBlk *
 InfiniteTags::accessBlock(const PacketPtr pkt, Cycles &lat)
 {
     const CacheBlk::KeyType key{pkt->getAddr(), pkt->isSecure()};
-    uint64_t probes = 0;
+    const auto it = blockMap.find(makeTagHashKey(key));
 
-    for (auto it = blocks.begin(); it != blocks.end(); ++it) {
-        ++probes;
-        if (it->match(key)) {
-            stats.tagAccesses += probes;
-            stats.dataAccesses += 1;
-            it->increaseRefCount();
-            if (it != blocks.begin()) {
-                blocks.splice(blocks.begin(), blocks, it);
-            }
-            lat = lookupLatency;
-            return &blocks.front();
-        }
+    stats.tagAccesses += 1;
+    lat = lookupLatency;
+
+    if (it == blockMap.end()) {
+        return nullptr;
     }
 
-    stats.tagAccesses += probes;
-    lat = lookupLatency;
-    return nullptr;
+    CacheBlk &blk = *it->second;
+    assert(blk.match(key));
+    stats.dataAccesses += 1;
+    blk.increaseRefCount();
+    return &blk;
 }
 
 Addr
@@ -140,8 +159,14 @@ InfiniteTags::extractTag(const Addr addr) const
 void
 InfiniteTags::insertBlock(const PacketPtr pkt, CacheBlk *blk)
 {
+    assert(blk == &blocks.front());
+
     BaseTags::insertBlock(pkt, blk);
     stats.tagsInUse++;
+
+    [[maybe_unused]] const auto inserted = blockMap.emplace(
+        std::make_pair(blk->getTag(), blk->isSecure()), blocks.begin());
+    assert(inserted.second);
 
     if (partitionManager) {
         auto partition_id = partitionManager->readPacketPartitionID(pkt);
@@ -152,12 +177,37 @@ InfiniteTags::insertBlock(const PacketPtr pkt, CacheBlk *blk)
 void
 InfiniteTags::invalidate(CacheBlk *blk)
 {
+    const auto entry =
+        blockMap.find(std::make_pair(blk->getTag(), blk->isSecure()));
+    assert(entry != blockMap.end());
+    const auto block_it = entry->second;
+    assert(&*block_it == blk);
+    blockMap.erase(entry);
+
     if (partitionManager) {
         partitionManager->notifyRelease(blk->getPartitionId());
     }
 
     BaseTags::invalidate(blk);
     stats.tagsInUse--;
+    invalidBlocks.push_back(block_it);
+}
+
+void
+InfiniteTags::moveBlock(CacheBlk *src_blk, CacheBlk *dest_blk)
+{
+    assert(dest_blk == &blocks.front());
+
+    auto entry =
+        blockMap.find(std::make_pair(src_blk->getTag(), src_blk->isSecure()));
+    assert(entry != blockMap.end());
+    const auto src_it = entry->second;
+    assert(&*src_it == src_blk);
+
+    BaseTags::moveBlock(src_blk, dest_blk);
+
+    entry->second = blocks.begin();
+    invalidBlocks.push_back(src_it);
 }
 
 Addr
