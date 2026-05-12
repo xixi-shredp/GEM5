@@ -42,7 +42,7 @@ SimObject('Prefetcher.py', sim_objects=[
     'BOPPrefetcher', 'SBOOEPrefetcher', 'STeMSPrefetcher',
     'BingoPrefetcher', 'BertiPrefetcher', 'KairosPrefetcher',
     'StreamlinePrefetcher', 'AMDRegionTypePrefetcher',
-    'AMDRIPRegionPrefetcher', 'AMDRegionStreamPrefetchers'
+    'AMDRIPRegionPrefetcher', 'AMDRegionStreamPrefetchers',
     'PIFPrefetcher', 'FetchDirectedPrefetcher'
     ])
 
