@@ -49,6 +49,7 @@
 #include <cassert>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "base/addr_range.hh"
 #include "base/compiler.hh"
@@ -331,6 +332,13 @@ class BaseCache : public ClockedObject
 
         bool inCache(Addr addr, bool is_secure) const override
         { return cache.inCache(addr, is_secure); }
+
+        bool
+        readCacheBlock(Addr addr, bool is_secure,
+                       std::vector<uint8_t> &data) const override
+        {
+            return cache.readCacheBlock(addr, is_secure, data);
+        }
 
         bool hasBeenPrefetched(Addr addr, bool is_secure) const override
         { return cache.hasBeenPrefetched(addr, is_secure); }
@@ -1250,6 +1258,19 @@ class BaseCache : public ClockedObject
 
     bool inCache(Addr addr, bool is_secure) const {
         return tags->findBlock({addr, is_secure});
+    }
+
+    bool
+    readCacheBlock(Addr addr, bool is_secure, std::vector<uint8_t> &data) const
+    {
+        CacheBlk *block = tags->findBlock({addr, is_secure});
+        if (!block || !block->isValid() ||
+            !block->isSet(CacheBlk::ReadableBit) || block->data == nullptr) {
+            return false;
+        }
+
+        data.assign(block->data, block->data + blkSize);
+        return true;
     }
 
     bool hasBeenPrefetched(Addr addr, bool is_secure) const {

@@ -217,6 +217,16 @@ class Base : public ClockedObject
         }
 
         /**
+         * Check if request data is available for get().
+         * @result true if the request data was captured in this object
+         */
+        bool
+        hasData() const
+        {
+            return data != nullptr;
+        }
+
+        /**
          * Gets the associated data of the request triggering the event
          * @param Byte ordering of the stored data
          * @return the data
