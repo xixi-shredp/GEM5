@@ -33,7 +33,7 @@ SimObject('Prefetcher.py', sim_objects=[
     'StridePrefetcherHashedSetAssociative', 'StridePrefetcher',
     'SmsPrefetcher', 'TaggedPrefetcher', 'IndirectMemoryPrefetcher',
     'SignaturePathPrefetcher', 'SignaturePathPrefetcherV2',
-    'AccessMapPatternMatching', 'AMPMPrefetcher',
+    'AccessMapPatternMatching', 'AMPMPrefetcher', 'AppleAMPMPrefetcher',
     'DeltaCorrelatingPredictionTables', 'DCPTPrefetcher',
     'IrregularStreamBufferPrefetcher', 'SlimAMPMPrefetcher',
     'BOPPrefetcher', 'SBOOEPrefetcher', 'STeMSPrefetcher', 'PIFPrefetcher',
@@ -41,6 +41,7 @@ SimObject('Prefetcher.py', sim_objects=[
     ])
 
 Source('access_map_pattern_matching.cc')
+Source('apple_ampm.cc')
 Source('base.cc')
 Source('multi.cc')
 Source('bop.cc')

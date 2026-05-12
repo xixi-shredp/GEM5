@@ -217,6 +217,16 @@ class Base : public ClockedObject
         }
 
         /**
+         * Checks if this event carries request data that can be read with get.
+         * @return true if get can be called safely
+         */
+        bool
+        hasData() const
+        {
+            return data != nullptr;
+        }
+
+        /**
          * Gets the associated data of the request triggering the event
          * @param Byte ordering of the stored data
          * @return the data
