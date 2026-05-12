@@ -217,7 +217,8 @@ class Base : public ClockedObject
         }
 
         /**
-         * Check whether the request data was captured for this event.
+         * Check if request data is available for get().
+         * @result true if the request data was captured in this object
          */
         bool
         hasData() const

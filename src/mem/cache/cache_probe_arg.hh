@@ -39,6 +39,8 @@
 #ifndef __MEM_CACHE_PROBE_ARG_HH__
 #define __MEM_CACHE_PROBE_ARG_HH__
 
+#include <vector>
+
 #include "mem/packet.hh"
 
 namespace gem5
@@ -57,6 +59,13 @@ struct CacheAccessor
 
     /** Determine if address is in cache */
     virtual bool inCache(Addr addr, bool is_secure) const = 0;
+
+    /** Copy a resident cache block's data when the cache exposes it. */
+    virtual bool
+    readCacheBlock(Addr addr, bool is_secure, std::vector<uint8_t> &data) const
+    {
+        return false;
+    }
 
     /** Determine if address has been prefetched */
     virtual bool hasBeenPrefetched(Addr addr, bool is_secure) const = 0;
