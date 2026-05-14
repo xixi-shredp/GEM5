@@ -34,6 +34,7 @@ SimObject('Prefetcher.py', sim_objects=[
     'SmsPrefetcher', 'TaggedPrefetcher', 'IndirectMemoryPrefetcher',
     'SignaturePathPrefetcher', 'SignaturePathPrefetcherV2',
     'AccessMapPatternMatching', 'AMPMPrefetcher', 'AppleAMPMPrefetcher',
+    'AMDAOPPrefetcher',
     'DeltaCorrelatingPredictionTables', 'DCPTPrefetcher',
     'IrregularStreamBufferPrefetcher', 'SlimAMPMPrefetcher',
     'BOPPrefetcher', 'SBOOEPrefetcher', 'STeMSPrefetcher', 'PIFPrefetcher',
@@ -41,6 +42,7 @@ SimObject('Prefetcher.py', sim_objects=[
     ])
 
 Source('access_map_pattern_matching.cc')
+Source('amd_aop.cc')
 Source('apple_ampm.cc')
 Source('base.cc')
 Source('multi.cc')

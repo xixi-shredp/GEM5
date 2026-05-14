@@ -68,6 +68,14 @@ struct CacheAccessor
     /** Determine if address is in cache miss queue */
     virtual bool inMissQueue(Addr addr, bool is_secure) const = 0;
 
+    /** Copy a resident cache block without changing cache state */
+    virtual bool
+    readCacheBlock(Addr addr, bool is_secure, uint8_t *data,
+                   unsigned size) const
+    {
+        return false;
+    }
+
     /** Determine if cache is coalescing writes */
     virtual bool coalesce() const = 0;
 };
