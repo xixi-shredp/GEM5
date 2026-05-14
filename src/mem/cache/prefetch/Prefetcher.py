@@ -1048,6 +1048,89 @@ class BOPPrefetcher(QueuedPrefetcher):
     on_inst = False
 
 
+class AppleCDPPrefetcher(QueuedPrefetcher):
+    type = "AppleCDPPrefetcher"
+    cxx_class = "gem5::prefetch::AppleCDP"
+    cxx_header = "mem/cache/prefetch/apple_cdp.hh"
+
+    on_miss = True
+    on_inst = False
+    on_write = False
+    use_virtual_addresses = True
+    tag_prefetch = True
+    queue_squash = True
+    queue_filter = True
+    cache_snoop = True
+
+    pointer_bytes = Param.Unsigned(8, "Size of a memory pointer candidate")
+    scan_granularity = Param.Unsigned(
+        8, "Byte stride used when scanning a cache line for pointers"
+    )
+    pointer_match_bits = Param.Unsigned(
+        16,
+        "High-order candidate-address bits that must match the fill address",
+    )
+    min_candidate_address = Param.Addr(
+        4096, "Minimum candidate address accepted as a pointer"
+    )
+    max_candidate_address = Param.Addr(
+        0, "Maximum candidate address accepted as a pointer; 0 disables"
+    )
+    reject_negative_pointers = Param.Bool(
+        True, "Reject candidates whose compared high bits are all one"
+    )
+    reject_zero_high_bits = Param.Bool(
+        False, "Reject candidates whose compared high bits are all zero"
+    )
+    prefetch_same_line = Param.Bool(
+        False, "Allow prefetches for candidates pointing at the scanned line"
+    )
+    scan_prefetch_fills = Param.Bool(
+        True, "Scan lines brought by AppleCDP prefetches recursively"
+    )
+    require_pc = Param.Bool(
+        True, "Require a valid PC to index the quality-factor table"
+    )
+
+    qf_pc_entries = Param.Unsigned(
+        256, "Number of hashed-PC rows in the quality-factor table"
+    )
+    qf_counter_bits = Param.Unsigned(
+        4, "Number of bits in each AppleCDP quality-factor counter"
+    )
+    qf_initial_value = Param.Unsigned(
+        15, "Initial value for per-candidate and adjacent-line QF counters"
+    )
+    global_initial_value = Param.Unsigned(
+        15, "Initial value for the global QF counter"
+    )
+    qf_counter_threshold = Param.Unsigned(
+        1, "Minimum per-candidate QF counter value required to prefetch"
+    )
+    adjacent_line_threshold = Param.Unsigned(
+        1, "Minimum adjacent-line QF counter value required to prefetch"
+    )
+    global_threshold = Param.Unsigned(
+        1, "Minimum global QF counter value required to prefetch"
+    )
+    qf_reset_interval = Param.Unsigned(
+        8192, "Scanned-fill interval for resetting QF counters; 0 disables"
+    )
+
+    history_entries = Param.Unsigned(
+        128, "Number of direct-mapped entries in the pointer history filter"
+    )
+    request_cache_entries = Param.Unsigned(
+        256, "Number of direct-mapped entries in the prefetch request cache"
+    )
+    enable_adjacent_line = Param.Bool(
+        True, "Enable the patent's separate adjacent-line prefetch"
+    )
+    adjacent_line_distance = Param.Int(
+        1, "Adjacent prefetch distance in cache lines"
+    )
+
+
 class SmsPrefetcher(QueuedPrefetcher):
     # Paper: https://web.eecs.umich.edu/~twenisch/papers/isca06.pdf
     type = "SmsPrefetcher"
