@@ -50,6 +50,7 @@
 #include "debug/HtmCpu.hh"
 #include "debug/Mwait.hh"
 #include "debug/SimpleCPU.hh"
+#include "mem/indirect_memory_hint.hh"
 #include "mem/packet.hh"
 #include "mem/packet_access.hh"
 #include "params/BaseTimingSimpleCPU.hh"
@@ -468,6 +469,8 @@ TimingSimpleCPU::initiateMemRead(Addr addr, unsigned size,
     RequestPtr req = std::make_shared<Request>(
         addr, size, flags, dataRequestorId(), pc, thread->contextId());
     req->setByteEnable(byte_enable);
+    annotateIndirectMemoryPrefetchHint(req, curStaticInst, true, size,
+                                       byte_enable);
 
     req->taskId(taskId());
 

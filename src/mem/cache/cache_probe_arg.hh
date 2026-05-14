@@ -68,6 +68,13 @@ struct CacheAccessor
     /** Determine if address is in cache miss queue */
     virtual bool inMissQueue(Addr addr, bool is_secure) const = 0;
 
+    /** Read bytes from a resident cache block, if the cache exposes data. */
+    virtual bool
+    readData(Addr addr, bool is_secure, uint8_t *data, unsigned size) const
+    {
+        return false;
+    }
+
     /** Determine if cache is coalescing writes */
     virtual bool coalesce() const = 0;
 };

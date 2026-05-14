@@ -1057,6 +1057,9 @@ Fault
     %(op_rd)s;
     %(set_vlenb)s;
     %(ea_code)s;
+    bindIndirectMemoryPrefetchTarget(
+        xc->tcBase()->contextId(),
+        RiscvISA::vecRegClass[machInst.vs2 + vs2RegIdx], Rs1, 0);
     constexpr uint8_t elem_size = sizeof(Vd[0]);
     RiscvISA::vreg_t tmp_v0;
     uint8_t *v0;
@@ -1103,6 +1106,9 @@ Fault
     %(set_vlenb)s;
     constexpr uint8_t elem_size = sizeof(Vd[0]);
     %(ea_code)s; // ea_code depends on elem_size
+    bindIndirectMemoryPrefetchTarget(
+        xc->tcBase()->contextId(),
+        RiscvISA::vecRegClass[machInst.vs2 + vs2RegIdx], Rs1, 0);
 
     RiscvISA::vreg_t tmp_v0;
     uint8_t *v0;

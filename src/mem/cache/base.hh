@@ -48,6 +48,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <cstring>
 #include <string>
 
 #include "base/addr_range.hh"
@@ -341,6 +342,25 @@ class BaseCache : public ClockedObject
 
         bool inMissQueue(Addr addr, bool is_secure) const override
         { return cache.inMissQueue(addr, is_secure); }
+
+        bool
+        readData(Addr addr, bool is_secure, uint8_t *data,
+                 unsigned size) const override
+        {
+            CacheBlk *blk = cache.tags->findBlock({addr, is_secure});
+            if (!blk || !blk->isValid() ||
+                !blk->isSet(CacheBlk::ReadableBit)) {
+                return false;
+            }
+
+            Addr offset = addr & Addr(cache.blkSize - 1);
+            if (offset + size > cache.blkSize) {
+                return false;
+            }
+
+            std::memcpy(data, blk->data + offset, size);
+            return true;
+        }
 
         bool coalesce() const override
         { return cache.coalesce(); }

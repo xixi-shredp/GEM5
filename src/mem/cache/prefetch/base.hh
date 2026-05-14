@@ -47,6 +47,7 @@
 #define __MEM_CACHE_PREFETCH_BASE_HH__
 
 #include <cstdint>
+#include <cstring>
 
 #include "arch/generic/tlb.hh"
 #include "base/compiler.hh"
@@ -214,6 +215,30 @@ class Base : public ClockedObject
         bool isCacheMiss() const
         {
             return cacheMiss;
+        }
+
+        /**
+         * Checks whether this event captured request data.
+         * @return true if PrefetchInfo::get can be called safely.
+         */
+        bool
+        hasData() const
+        {
+            return data != nullptr;
+        }
+
+        /**
+         * Copies request data captured in this prefetch event.
+         * @return true if the requested byte range was available.
+         */
+        bool
+        copyData(uint8_t *dst, unsigned offset, unsigned bytes) const
+        {
+            if (data == nullptr || offset > size || bytes > size - offset) {
+                return false;
+            }
+            std::memcpy(dst, data + offset, bytes);
+            return true;
         }
 
         /**
