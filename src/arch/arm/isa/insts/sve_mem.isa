@@ -1826,6 +1826,15 @@ let {{
         EA = AA64FpBase_x[elemIndex] + XOffset'''
             eaCode_load = '''
         EA = AA64FpBase_x[elemIndex] + XOffset'''
+        targetBindCode = ''
+        if indexed_addr_form == IndexedAddrForm.SCA_PLUS_VEC:
+            targetBindCode = '''
+        bindIndirectMemoryPrefetchTarget(
+            xc->tcBase()->contextId(), ArmISA::vecRegClass[this->offset],
+            XBase,
+            offsetIsScaled ?
+                indirectMemoryPrefetchScaleToShift(sizeof(MemElemType)) : 0);
+        '''
 
         loadMemAccCode = '''
             AA64FpDest_x[elemIndex] = cSwap<RegElemType>(memData,
@@ -1849,6 +1858,7 @@ let {{
              'tpl_args': tplArgs,
              'memacc_code': loadMemAccCode,
              'ea_code' : (sveEnabledCheckCode + eaCode_load),
+             'target_bind_code' : targetBindCode,
              'fault_status_set_code' : faultStatusSetCode,
              'fault_status_reset_code' : faultStatusResetCode,
              'pred_check_code' : predCheckCode,

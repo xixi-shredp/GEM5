@@ -48,6 +48,7 @@
 #include "debug/Drain.hh"
 #include "debug/ExecFaulting.hh"
 #include "debug/SimpleCPU.hh"
+#include "mem/indirect_memory_hint.hh"
 #include "mem/packet.hh"
 #include "mem/packet_access.hh"
 #include "mem/physical.hh"
@@ -348,8 +349,12 @@ AtomicSimpleCPU::genMemFragmentRequest(const RequestPtr &req, Addr frag_addr,
         req->setVirt(frag_addr, frag_size, flags, dataRequestorId(),
                      inst_addr);
         req->setByteEnable(std::vector<bool>(it_start, it_end));
+        annotateIndirectMemoryPrefetchHint(
+            req, curStaticInst, true, frag_size,
+            std::vector<bool>(it_start, it_end));
     } else {
         predicate = false;
+        req->removeExtension<IndirectMemoryPrefetchHint>();
     }
 
     return predicate;

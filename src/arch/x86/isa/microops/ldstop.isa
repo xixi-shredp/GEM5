@@ -101,6 +101,7 @@ def template MicroLoadExecute {{
         %(op_decl)s;
         %(op_rd)s;
         %(ea_code)s;
+        %(target_bind_code)s;
         DPRINTF(X86, "%s : %s: The address is %#x\n", instMnem, mnemonic, EA);
 
         fault = readMemAtomic(xc, traceData, EA, Mem, dataSize, memFlags);
@@ -130,6 +131,7 @@ def template MicroLoadInitiateAcc {{
         %(op_decl)s;
         %(op_rd)s;
         %(ea_code)s;
+        %(target_bind_code)s;
         DPRINTF(X86, "%s : %s: The address is %#x\n", instMnem, mnemonic, EA);
 
         fault = initiateMemRead(xc, traceData, EA, %(memDataSize)s, memFlags);
@@ -451,6 +453,12 @@ let {{
         'bits(scale * Index + Base + disp, addressSize * 8 - 1, 0);'
 
     calculateEA = 'EA = SegBase + ' + segmentEAExpr
+    bindIndirectTarget = '''
+        bindIndirectMemoryPrefetchTarget(
+            xc->tcBase()->contextId(), X86ISA::intRegClass[index],
+            SegBase + bits(Base + disp, addressSize * 8 - 1, 0),
+            indirectMemoryPrefetchScaleToShift(scale));
+    '''
 
     def defineMicroLoadOp(mnemonic, code, bigCode='',
                           mem_flags="0", big=True, nonSpec=False,
@@ -471,11 +479,13 @@ let {{
         iops = [InstObjParams(name, Name, base,
                               { "code": code,
                                 "ea_code": calculateEA,
+                                "target_bind_code": bindIndirectTarget,
                                 "memDataSize": "dataSize" })]
         if big:
             iops += [InstObjParams(name, Name + "Big", base,
                                    { "code": bigCode,
                                      "ea_code": calculateEA,
+                                     "target_bind_code": bindIndirectTarget,
                                      "memDataSize": "dataSize" })]
         for iop in iops:
             header_output += MicroLdStOpDeclare.subst(iop)
@@ -557,6 +567,7 @@ let {{
         iop = InstObjParams(name, Name, 'X86ISA::LdStSplitOp',
                             { "code": code,
                               "ea_code": calculateEA,
+                              "target_bind_code": bindIndirectTarget,
                               "memDataSize": "2 * dataSize" })
 
         header_output += MicroLdStSplitOpDeclare.subst(iop)

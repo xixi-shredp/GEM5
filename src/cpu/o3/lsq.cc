@@ -56,6 +56,7 @@
 #include "debug/HtmCpu.hh"
 #include "debug/LSQ.hh"
 #include "debug/Writeback.hh"
+#include "mem/indirect_memory_hint.hh"
 #include "params/BaseO3CPU.hh"
 
 namespace gem5
@@ -1174,6 +1175,10 @@ LSQ::LSQRequest::addReq(Addr addr, unsigned size,
         req->setByteEnable(
                 std::vector<bool>(byte_enable.begin(),
                                   byte_enable.end()-inactive_tail_size));
+        annotateIndirectMemoryPrefetchHint(
+            req, _inst->staticInst, isLoad(), req->getSize(),
+            std::vector<bool>(byte_enable.begin(),
+                              byte_enable.end() - inactive_tail_size));
 
         /* If the request is marked as NO_ACCESS, setup a local access */
         if (_flags.isSet(Request::NO_ACCESS)) {

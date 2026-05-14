@@ -49,6 +49,7 @@
 #include "cpu/utils.hh"
 #include "debug/Activity.hh"
 #include "debug/MinorMem.hh"
+#include "mem/indirect_memory_hint.hh"
 
 namespace gem5
 {
@@ -1646,6 +1647,8 @@ LSQ::pushRequest(MinorDynInstPtr inst, bool isLoad, uint8_t *data,
         /* I've no idea why we need the PC, but give it */
         inst->pc->instAddr(), std::move(amo_op));
     request->request->setByteEnable(byte_enable);
+    annotateIndirectMemoryPrefetchHint(request->request, inst->staticInst,
+                                       isLoad, size, byte_enable);
 
     /* If the request is marked as NO_ACCESS, setup a local access
      * doing nothing */

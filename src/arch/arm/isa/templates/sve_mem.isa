@@ -812,6 +812,7 @@ def template SveGatherLoadMicroopExecute {{
         %(op_decl)s;
         %(op_rd)s;
         %(ea_code)s;
+        %(target_bind_code)s;
 
         MemElemType memData = 0;
 
@@ -863,6 +864,7 @@ def template SveGatherLoadMicroopInitiateAcc {{
         %(op_src_decl)s;
         %(op_rd)s;
         %(ea_code)s;
+        %(target_bind_code)s;
 
         MemElemType memData = 0;
 
