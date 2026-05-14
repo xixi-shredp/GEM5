@@ -39,6 +39,7 @@ SimObject('Prefetcher.py', sim_objects=[
     'ARMHintPrefetcher',
     'SignaturePathPrefetcher', 'SignaturePathPrefetcherV2',
     'AccessMapPatternMatching', 'AMPMPrefetcher', 'AppleAMPMPrefetcher',
+    'AMDAOPPrefetcher',
     'DeltaCorrelatingPredictionTables', 'DCPTPrefetcher',
     'IrregularStreamBufferPrefetcher', 'SlimAMPMPrefetcher',
     'BOPPrefetcher', 'SBOOEPrefetcher', 'STeMSPrefetcher',
@@ -52,6 +53,7 @@ DebugFlag('BertiPrefetcher')
 
 Source('access_map_pattern_matching.cc')
 Source('amd_region_type.cc')
+Source('amd_aop.cc')
 Source('apple_ampm.cc')
 Source('apple_cdp.cc')
 Source('base.cc')

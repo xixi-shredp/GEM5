@@ -80,6 +80,9 @@ struct CacheAccessor
     /** Read bytes from a resident cache block, if the cache exposes data. */
     virtual bool
     readData(Addr addr, bool is_secure, uint8_t *data, unsigned size) const
+        /** Copy a resident cache block without changing cache state */
+        virtual bool readCacheBlock(Addr addr, bool is_secure, uint8_t *data,
+                                    unsigned size) const
     {
         return false;
     }
