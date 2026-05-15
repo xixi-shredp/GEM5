@@ -371,11 +371,14 @@ class BaseCache : public ClockedObject
 
             std::memcpy(data, blk->data + offset, size);
             return true;
-            readCacheBlock(Addr addr, bool is_secure, uint8_t *data,
-                           unsigned size) const override
-            {
-                return cache.readCacheBlock(addr, is_secure, data, size);
-            }
+        }
+
+        bool
+        readCacheBlock(Addr addr, bool is_secure, uint8_t *data,
+                       unsigned size) const override
+        {
+            return cache.readCacheBlock(addr, is_secure, data, size);
+        }
 
         bool coalesce() const override
         { return cache.coalesce(); }
@@ -1396,18 +1399,21 @@ class BaseCache : public ClockedObject
         }
 
         data.assign(block->data, block->data + blkSize);
-        readCacheBlock(Addr addr, bool is_secure, uint8_t *data, unsigned size)
-            const
-        {
-            CacheBlk *block = tags->findBlock({addr, is_secure});
-            if (data == nullptr || block == nullptr ||
-                block->data == nullptr ||
-                !block->isSet(CacheBlk::ReadableBit) || size > blkSize) {
-                return false;
-            }
-            std::memcpy(data, block->data, size);
-            return true;
+        return true;
+    }
+
+    bool
+    readCacheBlock(Addr addr, bool is_secure, uint8_t *data,
+                   unsigned size) const
+    {
+        CacheBlk *block = tags->findBlock({addr, is_secure});
+        if (data == nullptr || block == nullptr || block->data == nullptr ||
+            !block->isSet(CacheBlk::ReadableBit) || size > blkSize) {
+            return false;
         }
+        std::memcpy(data, block->data, size);
+        return true;
+    }
 
     bool hasBeenPrefetched(Addr addr, bool is_secure) const {
         CacheBlk *block = tags->findBlock({addr, is_secure});
