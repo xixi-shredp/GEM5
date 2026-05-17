@@ -450,6 +450,8 @@ class BaseCache : public ClockedObject
             cmd.isLLSC();
     }
 
+    bool allocOnFill(PacketPtr pkt) const;
+
     /**
      * Regenerate block address using tags.
      * Block address regeneration depends on whether we're using a temporary
@@ -1175,8 +1177,7 @@ class BaseCache : public ClockedObject
     MSHR *allocateMissBuffer(PacketPtr pkt, Tick time, bool sched_send = true)
     {
         MSHR *mshr = mshrQueue.allocate(pkt->getBlockAddr(blkSize), blkSize,
-                                        pkt, time, order++,
-                                        allocOnFill(pkt->cmd));
+                                        pkt, time, order++, allocOnFill(pkt));
 
         if (mshrQueue.isFull()) {
             setBlocked((BlockedCause)MSHRQueue_MSHRs);

@@ -59,6 +59,7 @@
 #include "mem/cache/cache_blk.hh"
 #include "mem/cache/compressors/base.hh"
 #include "mem/cache/mshr.hh"
+#include "mem/cache/prefetch/fill_level.hh"
 #include "mem/cache/tags/base.hh"
 #include "mem/cache/write_queue_entry.hh"
 #include "mem/request.hh"
@@ -611,6 +612,11 @@ Cache::handleAtomicReqMiss(PacketPtr pkt, CacheBlk *&blk,
             bus_pkt->print());
 
     const std::string old_state = blk ? blk->print() : "";
+    const bool local_alloc_on_fill = allocOnFill(pkt);
+
+    if (bus_pkt->cmd.isHWPrefetch()) {
+        prefetch::consumePrefetchSkipCacheLevel(bus_pkt->req);
+    }
 
     Cycles latency = ticksToCycles(memSidePort.sendAtomic(bus_pkt));
 
@@ -635,7 +641,8 @@ Cache::handleAtomicReqMiss(PacketPtr pkt, CacheBlk *&blk,
 
                 // write-line request to the cache that promoted
                 // the write to a whole line
-                const bool allocate = allocOnFill(pkt->cmd) &&
+                const bool allocate =
+                    local_alloc_on_fill &&
                     (!writeAllocator || writeAllocator->allocate());
                 blk = handleFill(bus_pkt, blk, writebacks, allocate);
                 assert(blk != NULL);
@@ -645,8 +652,8 @@ Cache::handleAtomicReqMiss(PacketPtr pkt, CacheBlk *&blk,
                        bus_pkt->cmd == MemCmd::UpgradeResp) {
                 // we're updating cache state to allow us to
                 // satisfy the upstream request from the cache
-                blk = handleFill(bus_pkt, blk, writebacks,
-                                 allocOnFill(pkt->cmd));
+                blk =
+                    handleFill(bus_pkt, blk, writebacks, local_alloc_on_fill);
                 satisfyRequest(pkt, blk);
                 maintainClusivity(pkt->fromCache(), blk);
             } else {
