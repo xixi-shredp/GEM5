@@ -36,8 +36,8 @@ SimObject('Prefetcher.py', sim_objects=[
     'AccessMapPatternMatching', 'AMPMPrefetcher',
     'DeltaCorrelatingPredictionTables', 'DCPTPrefetcher',
     'IrregularStreamBufferPrefetcher', 'SlimAMPMPrefetcher',
-    'BOPPrefetcher', 'SBOOEPrefetcher', 'STeMSPrefetcher', 'PIFPrefetcher',
-    'FetchDirectedPrefetcher'
+    'BOPPrefetcher', 'PatternMergingPrefetcher', 'SBOOEPrefetcher',
+    'STeMSPrefetcher', 'PIFPrefetcher', 'FetchDirectedPrefetcher'
     ])
 
 Source('access_map_pattern_matching.cc')
@@ -49,6 +49,7 @@ Source('irregular_stream_buffer.cc')
 Source('indirect_memory.cc')
 Source('pif.cc')
 Source('queued.cc')
+Source('pattern_merging.cc')
 Source('sbooe.cc')
 Source('sms.cc')
 Source('signature_path.cc')
