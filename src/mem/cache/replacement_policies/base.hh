@@ -90,6 +90,10 @@ class Base : public SimObject
         replacement_data, const PacketPtr pkt)
     {
         reset(replacement_data);
+        if (pkt && pkt->req &&
+            pkt->req->getFlags().isSet(Request::EVICT_NEXT)) {
+            invalidate(replacement_data);
+        }
     }
     virtual void reset(const std::shared_ptr<ReplacementData>&
         replacement_data) const = 0;

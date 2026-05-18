@@ -371,6 +371,24 @@ class MemCtrl : public qos::MemCtrl
      */
     virtual Tick doBurstAccess(MemPacket* mem_pkt, MemInterface* mem_intr);
 
+    static Tick dspatchBandwidthWindowEnd;
+    static Tick dspatchBandwidthWindowTicks;
+    static unsigned dspatchBandwidthCasCount;
+    static unsigned dspatchCurrentBandwidthQuartile;
+    static unsigned dspatchBandwidthPeakCasCount;
+    static unsigned dspatchBandwidthSamplingUsers;
+    static std::vector<Tick> dspatchBandwidthCasIntervals;
+    static bool
+    dspatchBandwidthSamplingEnabled()
+    {
+        return dspatchBandwidthSamplingUsers != 0;
+    }
+    static void updateDspatchBandwidthPeakCasCount();
+    static void ageDspatchBandwidth(Tick now);
+    static void recordDspatchBandwidthCas(Tick casTick, Tick window);
+    static void updateDspatchBandwidthQuartile();
+    void sampleDspatchBandwidth(Tick casTick, MemInterface *mem_intr);
+
     /**
      * When a packet reaches its "readyTime" in the response Q,
      * use the "access()" method in AbstractMemory to actually
@@ -676,6 +694,19 @@ class MemCtrl : public qos::MemCtrl
   public:
 
     MemCtrl(const MemCtrlParams &p);
+
+    static void enableDspatchBandwidthSampling();
+    static void disableDspatchBandwidthSampling();
+
+    static unsigned
+    dspatchBandwidthQuartile()
+    {
+        if (!dspatchBandwidthSamplingEnabled()) {
+            return 0;
+        }
+        ageDspatchBandwidth(curTick());
+        return dspatchCurrentBandwidthQuartile;
+    }
 
     /**
      * Ensure that all interfaced have drained commands

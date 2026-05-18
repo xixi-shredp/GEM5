@@ -176,6 +176,11 @@ class Queued : public Base
     /** Percentage of requests that can be throttled */
     const unsigned int throttleControlPct;
 
+    virtual void
+    annotatePrefetchRequest(const PrefetchInfo &pfInfo, int32_t priority,
+                            RequestPtr req) const
+    {}
+
     struct QueuedStats : public statistics::Group
     {
         QueuedStats(statistics::Group *parent);
