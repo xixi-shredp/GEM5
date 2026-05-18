@@ -68,6 +68,7 @@ Queued::DeferredPacket::createPkt(Addr paddr, unsigned blk_size,
         req->setFlags(Request::SECURE);
     }
     prefetch::setPrefetchSkipCacheLevels(req, skipCacheLevels);
+    owner->annotatePrefetchRequest(pfInfo, priority, req);
     req->taskId(context_switch_task_id::Prefetcher);
     pkt = new Packet(req, MemCmd::HardPFReq);
     pkt->allocate();

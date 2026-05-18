@@ -40,6 +40,8 @@
 
 #include "mem/mem_ctrl.hh"
 
+#include <limits>
+
 #include "base/trace.hh"
 #include "debug/DRAM.hh"
 #include "debug/Drain.hh"
@@ -56,6 +58,14 @@ namespace gem5
 
 namespace memory
 {
+
+Tick MemCtrl::dspatchBandwidthWindowEnd = 0;
+Tick MemCtrl::dspatchBandwidthWindowTicks = 0;
+unsigned MemCtrl::dspatchBandwidthCasCount = 0;
+unsigned MemCtrl::dspatchCurrentBandwidthQuartile = 0;
+unsigned MemCtrl::dspatchBandwidthPeakCasCount = 0;
+unsigned MemCtrl::dspatchBandwidthSamplingUsers = 0;
+std::vector<Tick> MemCtrl::dspatchBandwidthCasIntervals;
 
 MemCtrl::MemCtrl(const MemCtrlParams &p) :
     qos::MemCtrl(p),
@@ -85,6 +95,15 @@ MemCtrl::MemCtrl(const MemCtrlParams &p) :
     writeQueue.resize(p.qos_priorities);
 
     dram->setCtrl(this, commandWindow);
+
+    const Tick dspatch_window =
+        std::max<Tick>(1, dram->dspatchBandwidthWindow());
+    const Tick dspatch_cas_interval =
+        std::max<Tick>(1, dram->dspatchCasInterval());
+    dspatchBandwidthWindowTicks =
+        std::max(dspatchBandwidthWindowTicks, dspatch_window);
+    dspatchBandwidthCasIntervals.push_back(dspatch_cas_interval);
+    updateDspatchBandwidthPeakCasCount();
 
     // perform a basic check of the write thresholds
     if (p.write_low_thresh_perc >= p.write_high_thresh_perc)
@@ -807,6 +826,9 @@ MemCtrl::doBurstAccess(MemPacket* mem_pkt, MemInterface* mem_intr)
     std::vector<MemPacketQueue>& queue = selQueue(mem_pkt->isRead());
     std::tie(cmd_at, mem_intr->nextBurstAt) =
             mem_intr->doBurstAccess(mem_pkt, mem_intr->nextBurstAt, queue);
+    if (dspatchBandwidthSamplingEnabled()) {
+        sampleDspatchBandwidth(cmd_at, mem_intr);
+    }
 
     DPRINTF(MemCtrl, "Access to %#x, ready at %lld next burst at %lld.\n",
             mem_pkt->addr, mem_pkt->readyTime, mem_intr->nextBurstAt);
@@ -832,6 +854,131 @@ MemCtrl::doBurstAccess(MemPacket* mem_pkt, MemInterface* mem_intr)
     }
 
     return cmd_at;
+}
+
+void
+MemCtrl::enableDspatchBandwidthSampling()
+{
+    if (dspatchBandwidthSamplingUsers++ == 0) {
+        dspatchBandwidthWindowEnd = 0;
+        dspatchBandwidthCasCount = 0;
+        dspatchCurrentBandwidthQuartile = 0;
+    }
+}
+
+void
+MemCtrl::disableDspatchBandwidthSampling()
+{
+    if (dspatchBandwidthSamplingUsers == 0) {
+        return;
+    }
+
+    --dspatchBandwidthSamplingUsers;
+    if (dspatchBandwidthSamplingUsers == 0) {
+        dspatchBandwidthWindowEnd = 0;
+        dspatchBandwidthCasCount = 0;
+        dspatchCurrentBandwidthQuartile = 0;
+    }
+}
+
+void
+MemCtrl::updateDspatchBandwidthQuartile()
+{
+    const unsigned peak_cas =
+        std::max<unsigned>(1, dspatchBandwidthPeakCasCount);
+    const uint64_t count = dspatchBandwidthCasCount;
+    if (count * 4 >= static_cast<uint64_t>(peak_cas) * 3) {
+        dspatchCurrentBandwidthQuartile = 3;
+    } else if (count * 2 >= peak_cas) {
+        dspatchCurrentBandwidthQuartile = 2;
+    } else if (count * 4 >= peak_cas) {
+        dspatchCurrentBandwidthQuartile = 1;
+    } else {
+        dspatchCurrentBandwidthQuartile = 0;
+    }
+}
+
+void
+MemCtrl::updateDspatchBandwidthPeakCasCount()
+{
+    const Tick window = std::max<Tick>(1, dspatchBandwidthWindowTicks);
+    dspatchBandwidthPeakCasCount = 0;
+    for (const Tick cas_interval : dspatchBandwidthCasIntervals) {
+        dspatchBandwidthPeakCasCount +=
+            std::max<unsigned>(1, divCeil(window, cas_interval));
+    }
+}
+
+void
+MemCtrl::ageDspatchBandwidth(Tick now)
+{
+    const Tick window = std::max<Tick>(1, dspatchBandwidthWindowTicks);
+    if (dspatchBandwidthWindowEnd == 0) {
+        dspatchBandwidthWindowEnd = now + window;
+        updateDspatchBandwidthQuartile();
+        return;
+    }
+
+    if (now >= dspatchBandwidthWindowEnd) {
+        const Tick elapsed_windows =
+            ((now - dspatchBandwidthWindowEnd) / window) + 1;
+        const Tick aged_windows = std::min<Tick>(
+            elapsed_windows, std::numeric_limits<unsigned>::digits);
+        for (Tick i = 0; i < aged_windows; ++i) {
+            dspatchBandwidthCasCount >>= 1;
+        }
+        dspatchBandwidthWindowEnd += elapsed_windows * window;
+    }
+
+    updateDspatchBandwidthQuartile();
+}
+
+void
+MemCtrl::recordDspatchBandwidthCas(Tick casTick, Tick window)
+{
+    if (!dspatchBandwidthSamplingEnabled()) {
+        return;
+    }
+
+    if (dspatchBandwidthWindowTicks == 0) {
+        dspatchBandwidthWindowTicks = window;
+    }
+
+    if (dspatchBandwidthWindowEnd == 0) {
+        dspatchBandwidthWindowEnd = casTick + window;
+    }
+
+    ageDspatchBandwidth(casTick);
+
+    ++dspatchBandwidthCasCount;
+    updateDspatchBandwidthQuartile();
+}
+
+void
+MemCtrl::sampleDspatchBandwidth(Tick casTick, MemInterface *mem_intr)
+{
+    if (!dspatchBandwidthSamplingEnabled()) {
+        return;
+    }
+
+    const Tick window = std::max<Tick>(1, mem_intr->dspatchBandwidthWindow());
+    const Tick prev_window = dspatchBandwidthWindowTicks;
+    dspatchBandwidthWindowTicks =
+        std::max(dspatchBandwidthWindowTicks, window);
+    if (dspatchBandwidthWindowTicks != prev_window) {
+        updateDspatchBandwidthPeakCasCount();
+    }
+
+    if (casTick <= curTick()) {
+        recordDspatchBandwidthCas(casTick, window);
+    } else {
+        schedule(new EventFunctionWrapper(
+                     [casTick, window] {
+                         MemCtrl::recordDspatchBandwidthCas(casTick, window);
+                     },
+                     name(), true),
+                 casTick);
+    }
 }
 
 bool

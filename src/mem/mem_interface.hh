@@ -282,6 +282,25 @@ class MemInterface : public AbstractMemory
      */
     virtual Tick commandOffset() const = 0;
 
+    /*
+     * @return DSPatch bandwidth tracking window. DRAM implementations
+     * override this with the paper's 4*tRC window.
+     */
+    virtual Tick
+    dspatchBandwidthWindow() const
+    {
+        return 4 * commandOffset();
+    }
+
+    /*
+     * @return minimum delay between DSPatch-counted CAS commands.
+     */
+    virtual Tick
+    dspatchCasInterval() const
+    {
+        return commandOffset();
+    }
+
     /**
      * Check if a burst operation can be issued to the interface
      *

@@ -194,6 +194,11 @@ class Queued : public Base
      */
     unsigned int ipopAggressivenessLevel;
 
+    virtual void
+    annotatePrefetchRequest(const PrefetchInfo &pfInfo, int32_t priority,
+                            RequestPtr req) const
+    {}
+
     struct QueuedStats : public statistics::Group
     {
         QueuedStats(statistics::Group *parent);

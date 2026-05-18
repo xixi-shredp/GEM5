@@ -714,6 +714,18 @@ class DRAMInterface : public MemInterface
         return (tRP + std::max(tRCD_RD, tRCD_WR));
     }
 
+    Tick
+    dspatchBandwidthWindow() const override
+    {
+        return 4 * (tRAS + tRP);
+    }
+
+    Tick
+    dspatchCasInterval() const override
+    {
+        return burstDelay();
+    }
+
     /*
      * Function to calulate unloaded, closed bank access latency
      */
