@@ -72,6 +72,8 @@ class Queued : public Base
         PacketPtr pkt;
         /** The priority of this prefetch */
         int32_t priority;
+        /** Cache levels above the target fill level to bypass allocation. */
+        uint8_t skipCacheLevels;
         /** Request used when a translation is needed */
         RequestPtr translationRequest;
         ThreadContext *tc;
@@ -87,11 +89,19 @@ class Queued : public Base
          * @param prio This prefetch priority
          */
         DeferredPacket(Queued *o, PrefetchInfo const &pfi, Tick t,
-            int32_t prio, const CacheAccessor &_cache)
-            : owner(o), pfInfo(pfi), tick(t), pkt(nullptr),
-            priority(prio), translationRequest(), tc(nullptr),
-            ongoingTranslation(false), cache(&_cache) {
-        }
+                       int32_t prio, uint8_t skip_cache_levels,
+                       const CacheAccessor &_cache)
+            : owner(o),
+              pfInfo(pfi),
+              tick(t),
+              pkt(nullptr),
+              priority(prio),
+              skipCacheLevels(skip_cache_levels),
+              translationRequest(),
+              tc(nullptr),
+              ongoingTranslation(false),
+              cache(&_cache)
+        {}
 
         bool operator>(const DeferredPacket& that) const
         {
@@ -196,6 +206,12 @@ class Queued : public Base
         statistics::Scalar pfSpanPage;
         statistics::Scalar pfUsefulSpanPage;
     } statsQueued;
+    virtual uint8_t
+    prefetchFillSkipCacheLevels(const PrefetchInfo &, Addr, int32_t) const
+    {
+        return 0;
+    }
+
   public:
     using AddrPriority = std::pair<Addr, int32_t>;
 
@@ -271,7 +287,8 @@ class Queued : public Base
      * @return True if the prefetch request was found in the queue
      */
     bool alreadyInQueue(std::list<DeferredPacket> &queue,
-                        const PrefetchInfo &pfi, int32_t priority);
+                        const PrefetchInfo &pfi, int32_t priority,
+                        uint8_t skip_cache_levels);
 
     /**
      * Returns the maxmimum number of prefetch requests that are allowed

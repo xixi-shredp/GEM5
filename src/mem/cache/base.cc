@@ -57,6 +57,7 @@
 #include "mem/cache/mshr.hh"
 #include "mem/cache/mshr_queue.hh"
 #include "mem/cache/prefetch/base.hh"
+#include "mem/cache/prefetch/fill_level.hh"
 #include "mem/cache/prefetch/ipop_info.hh"
 #include "mem/cache/queue_entry.hh"
 #include "mem/cache/tags/compressed_tags.hh"
@@ -68,6 +69,16 @@
 
 namespace gem5
 {
+
+bool
+BaseCache::allocOnFill(PacketPtr pkt) const
+{
+    if (pkt->cmd.isHWPrefetch() &&
+        prefetch::prefetchSkipCacheLevels(pkt->req) > 0) {
+        return false;
+    }
+    return allocOnFill(pkt->cmd);
+}
 
 BaseCache::CacheResponsePort::CacheResponsePort(const std::string &_name,
                                           BaseCache& _cache,
@@ -466,7 +477,7 @@ BaseCache::handleTimingReqMiss(PacketPtr pkt, MSHR *mshr, CacheBlk *blk,
                 // port and also takes into account the additional
                 // delay of the xbar.
                 mshr->allocateTarget(pkt, forward_time, order++,
-                                     allocOnFill(pkt->cmd));
+                                     allocOnFill(pkt));
                 if (mshr->getNumTargets() >= numTarget) {
                     noTargetMSHR = mshr;
                     setBlocked(Blocked_NoTargets);
@@ -2168,7 +2179,14 @@ BaseCache::sendMSHRQueuePacket(MSHR* mshr)
         pkt->setSatisfied();
     }
 
+    const bool consumed_skip =
+        pkt->cmd.isHWPrefetch() &&
+        prefetch::consumePrefetchSkipCacheLevel(pkt->req);
+
     if (!memSidePort.sendTimingReq(pkt)) {
+        if (consumed_skip) {
+            prefetch::restorePrefetchSkipCacheLevel(pkt->req);
+        }
         // we are awaiting a retry, but we
         // delete the packet and will be creating a new packet
         // when we get the opportunity

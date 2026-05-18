@@ -42,9 +42,9 @@ SimObject('Prefetcher.py', sim_objects=[
     'AMDAOPPrefetcher',
     'DeltaCorrelatingPredictionTables', 'DCPTPrefetcher',
     'IrregularStreamBufferPrefetcher', 'SlimAMPMPrefetcher',
-    'BOPPrefetcher', 'SBOOEPrefetcher', 'STeMSPrefetcher',
-    'BingoPrefetcher', 'BertiPrefetcher', 'KairosPrefetcher',
-    'StreamlinePrefetcher', 'AMDRegionTypePrefetcher',
+    'BOPPrefetcher', 'PatternMergingPrefetcher', 'SBOOEPrefetcher',
+    'STeMSPrefetcher', 'BingoPrefetcher', 'BertiPrefetcher',
+    'KairosPrefetcher', 'StreamlinePrefetcher', 'AMDRegionTypePrefetcher',
     'AMDRIPRegionPrefetcher', 'AMDRegionStreamPrefetchers',
     'PIFPrefetcher', 'FetchDirectedPrefetcher', 'AppleCDPPrefetcher'
     ])
@@ -72,6 +72,7 @@ Source('arm_hint.cc')
 Source('pif.cc')
 Source('queued.cc')
 Source('resemble.cc')
+Source('pattern_merging.cc')
 Source('sbooe.cc')
 Source('sms.cc')
 Source('amd_contiguous_stream.cc')
