@@ -75,6 +75,8 @@ class Queued : public Base
         RequestPtr translationRequest;
         ThreadContext *tc;
         bool ongoingTranslation;
+        /** Alecto next-level-only prefetches bypass this cache only. */
+        bool skipThisCache;
         const CacheAccessor *cache;
 
         /**
@@ -86,11 +88,19 @@ class Queued : public Base
          * @param prio This prefetch priority
          */
         DeferredPacket(Queued *o, PrefetchInfo const &pfi, Tick t,
-            int32_t prio, const CacheAccessor &_cache)
-            : owner(o), pfInfo(pfi), tick(t), pkt(nullptr),
-            priority(prio), translationRequest(), tc(nullptr),
-            ongoingTranslation(false), cache(&_cache) {
-        }
+                       int32_t prio, const CacheAccessor &_cache,
+                       bool skip_this_cache = false)
+            : owner(o),
+              pfInfo(pfi),
+              tick(t),
+              pkt(nullptr),
+              priority(prio),
+              translationRequest(),
+              tc(nullptr),
+              ongoingTranslation(false),
+              skipThisCache(skip_this_cache),
+              cache(&_cache)
+        {}
 
         bool operator>(const DeferredPacket& that) const
         {
@@ -197,13 +207,17 @@ class Queued : public Base
     void
     notify(const CacheAccessProbeArg &acc, const PrefetchInfo &pfi) override;
 
-    void insert(const PacketPtr &pkt, PrefetchInfo &new_pfi, int32_t priority,
-                const CacheAccessor &cache);
+    bool insert(const PacketPtr &pkt, PrefetchInfo &new_pfi, int32_t priority,
+                const CacheAccessor &cache, bool skip_this_cache = false);
+    bool hasQueued(const PrefetchInfo &pfi) const;
+    void squash(const PrefetchInfo &pfi);
 
     virtual void calculatePrefetch(const PrefetchInfo &pfi,
                                    std::vector<AddrPriority> &addresses,
                                    const CacheAccessor &cache) = 0;
     PacketPtr getPacket() override;
+    PacketPtr getPacket(Addr *issued_addr, Addr *issued_pc,
+                        bool *issued_secure);
 
     Tick nextPrefetchReadyTime() const override
     {

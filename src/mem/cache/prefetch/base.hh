@@ -385,6 +385,18 @@ class Base : public ClockedObject
     virtual void
     setParentInfo(System *sys, ProbeManager *pm, unsigned blk_size);
 
+    bool
+    usesVirtualAddresses() const
+    {
+        return useVirtualAddresses;
+    }
+
+    RequestorID
+    getRequestorId() const
+    {
+        return requestorId;
+    }
+
     /**
      * Notify prefetcher of cache access (may be any access or just
      * misses, depending on cache parameters.)
@@ -394,6 +406,16 @@ class Base : public ClockedObject
 
     /** Notify prefetcher of cache fill */
     virtual void notifyFill(const CacheAccessProbeArg &acc)
+    {}
+
+    /** Notify prefetcher that a packet returned by getPacket was accepted. */
+    virtual void
+    notifyPrefetchAccepted(PacketPtr pkt)
+    {}
+
+    /** Notify prefetcher that a packet returned by getPacket was dropped. */
+    virtual void
+    notifyPrefetchDropped(PacketPtr pkt)
     {}
 
     /** Notify prefetcher of cache eviction */

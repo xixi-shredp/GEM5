@@ -607,6 +607,11 @@ Cache::handleAtomicReqMiss(PacketPtr pkt, CacheBlk *&blk,
         bus_pkt = pkt;
     }
 
+    const bool alloc_on_fill = is_forward ? false : allocOnFill(pkt);
+    if (!is_forward && pkt->req->isPrefetchSkipThisCache()) {
+        pkt->req->clearFlags(Request::PREFETCH_SKIP_THIS_CACHE);
+    }
+
     DPRINTF(Cache, "%s: Sending an atomic %s\n", __func__,
             bus_pkt->print());
 
@@ -635,7 +640,8 @@ Cache::handleAtomicReqMiss(PacketPtr pkt, CacheBlk *&blk,
 
                 // write-line request to the cache that promoted
                 // the write to a whole line
-                const bool allocate = allocOnFill(pkt->cmd) &&
+                const bool allocate =
+                    alloc_on_fill &&
                     (!writeAllocator || writeAllocator->allocate());
                 blk = handleFill(bus_pkt, blk, writebacks, allocate);
                 assert(blk != NULL);
@@ -645,8 +651,7 @@ Cache::handleAtomicReqMiss(PacketPtr pkt, CacheBlk *&blk,
                        bus_pkt->cmd == MemCmd::UpgradeResp) {
                 // we're updating cache state to allow us to
                 // satisfy the upstream request from the cache
-                blk = handleFill(bus_pkt, blk, writebacks,
-                                 allocOnFill(pkt->cmd));
+                blk = handleFill(bus_pkt, blk, writebacks, alloc_on_fill);
                 satisfyRequest(pkt, blk);
                 maintainClusivity(pkt->fromCache(), blk);
             } else {

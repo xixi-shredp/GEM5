@@ -167,6 +167,8 @@ class Request : public Extensible<Request>
         PF_EXCLUSIVE                = 0x02000000,
         /** The request should be marked as LRU. */
         EVICT_NEXT                  = 0x04000000,
+        /** A prefetch should allocate in the next cache, not this cache. */
+        PREFETCH_SKIP_THIS_CACHE    = 0x0000004000000000,
         /** The request should be marked with ACQUIRE. */
         ACQUIRE                     = 0x00020000,
         /** The request should be marked with ACQUIRE_PC. */
@@ -1029,6 +1031,11 @@ class Request : public Extensible<Request>
     isPrefetch() const
     {
         return (_flags.isSet(PREFETCH | PF_EXCLUSIVE));
+    }
+    bool
+    isPrefetchSkipThisCache() const
+    {
+        return _flags.isSet(PREFETCH_SKIP_THIS_CACHE);
     }
     bool isPrefetchEx() const { return _flags.isSet(PF_EXCLUSIVE); }
     bool isLLSC() const { return _flags.isSet(LLSC); }

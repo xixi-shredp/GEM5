@@ -173,6 +173,10 @@ NoncoherentCache::handleAtomicReqMiss(PacketPtr pkt, CacheBlk *&blk,
 {
     PacketPtr bus_pkt = createMissPacket(pkt, blk, true,
                                          pkt->isWholeLineWrite(blkSize));
+    const bool alloc_on_fill = allocOnFill(pkt);
+    if (pkt->req->isPrefetchSkipThisCache()) {
+        pkt->req->clearFlags(Request::PREFETCH_SKIP_THIS_CACHE);
+    }
     DPRINTF(Cache, "Sending an atomic %s\n", bus_pkt->print());
 
     Cycles latency = ticksToCycles(memSidePort.sendAtomic(bus_pkt));
@@ -194,7 +198,7 @@ NoncoherentCache::handleAtomicReqMiss(PacketPtr pkt, CacheBlk *&blk,
         // afterall it is a read response
         DPRINTF(Cache, "Block for addr %#llx being updated in Cache\n",
                 bus_pkt->getAddr());
-        blk = handleFill(bus_pkt, blk, writebacks, allocOnFill(bus_pkt->cmd));
+        blk = handleFill(bus_pkt, blk, writebacks, alloc_on_fill);
         assert(blk);
     }
     satisfyRequest(pkt, blk);

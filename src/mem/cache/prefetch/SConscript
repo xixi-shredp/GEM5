@@ -29,7 +29,8 @@
 Import('*')
 
 SimObject('Prefetcher.py', sim_objects=[
-    'BasePrefetcher', 'MultiPrefetcher', 'QueuedPrefetcher',
+    'BasePrefetcher', 'MultiPrefetcher', 'AlectoMultiPrefetchers',
+    'QueuedPrefetcher',
     'StridePrefetcherHashedSetAssociative', 'StridePrefetcher',
     'SmsPrefetcher', 'TaggedPrefetcher', 'IndirectMemoryPrefetcher',
     'SignaturePathPrefetcher', 'SignaturePathPrefetcherV2',
@@ -41,6 +42,7 @@ SimObject('Prefetcher.py', sim_objects=[
     ])
 
 Source('access_map_pattern_matching.cc')
+Source('alecto_multi.cc')
 Source('base.cc')
 Source('multi.cc')
 Source('bop.cc')

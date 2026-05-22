@@ -397,8 +397,12 @@ BaseCache::handleTimingReqMiss(PacketPtr pkt, MSHR *mshr, CacheBlk *blk,
                 // buffer and to schedule an event to the queued
                 // port and also takes into account the additional
                 // delay of the xbar.
+                const bool alloc_on_fill = allocOnFill(pkt);
                 mshr->allocateTarget(pkt, forward_time, order++,
-                                     allocOnFill(pkt->cmd));
+                                     alloc_on_fill);
+                if (pkt->req->isPrefetchSkipThisCache()) {
+                    pkt->req->clearFlags(Request::PREFETCH_SKIP_THIS_CACHE);
+                }
                 if (mshr->getNumTargets() >= numTarget) {
                     noTargetMSHR = mshr;
                     setBlocked(Blocked_NoTargets);
@@ -961,18 +965,21 @@ BaseCache::getNextQueueEntry()
                 DPRINTF(HWPrefetch, "Prefetch %#x has hit in cache, "
                         "dropped.\n", pf_addr);
                 prefetcher->pfHitInCache();
+                prefetcher->notifyPrefetchDropped(pkt);
                 // free the request and packet
                 delete pkt;
             } else if (mshrQueue.findMatch(pf_addr, pkt->isSecure())) {
                 DPRINTF(HWPrefetch, "Prefetch %#x has hit in a MSHR, "
                         "dropped.\n", pf_addr);
                 prefetcher->pfHitInMSHR();
+                prefetcher->notifyPrefetchDropped(pkt);
                 // free the request and packet
                 delete pkt;
             } else if (writeBuffer.findMatch(pf_addr, pkt->isSecure())) {
                 DPRINTF(HWPrefetch, "Prefetch %#x has hit in the "
                         "Write Buffer, dropped.\n", pf_addr);
                 prefetcher->pfHitInWB();
+                prefetcher->notifyPrefetchDropped(pkt);
                 // free the request and packet
                 delete pkt;
             } else {
@@ -980,6 +987,7 @@ BaseCache::getNextQueueEntry()
                 // (hwpf_mshr_misses)
                 assert(pkt->req->requestorId() < system->maxRequestors());
                 stats.cmdStats(pkt).mshrMisses[pkt->req->requestorId()]++;
+                prefetcher->notifyPrefetchAccepted(pkt);
 
                 // allocate an MSHR and return it, note
                 // that we send the packet straight away, so do not

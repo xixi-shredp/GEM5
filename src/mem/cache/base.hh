@@ -450,6 +450,16 @@ class BaseCache : public ClockedObject
             cmd.isLLSC();
     }
 
+    inline bool
+    allocOnFill(const PacketPtr &pkt) const
+    {
+        if (pkt->req->isPrefetchSkipThisCache()) {
+            return false;
+        }
+
+        return allocOnFill(pkt->cmd);
+    }
+
     /**
      * Regenerate block address using tags.
      * Block address regeneration depends on whether we're using a temporary
@@ -1174,9 +1184,13 @@ class BaseCache : public ClockedObject
 
     MSHR *allocateMissBuffer(PacketPtr pkt, Tick time, bool sched_send = true)
     {
+        const bool alloc_on_fill = allocOnFill(pkt);
         MSHR *mshr = mshrQueue.allocate(pkt->getBlockAddr(blkSize), blkSize,
-                                        pkt, time, order++,
-                                        allocOnFill(pkt->cmd));
+                                        pkt, time, order++, alloc_on_fill);
+
+        if (pkt->req->isPrefetchSkipThisCache()) {
+            pkt->req->clearFlags(Request::PREFETCH_SKIP_THIS_CACHE);
+        }
 
         if (mshrQueue.isFull()) {
             setBlocked((BlockedCause)MSHRQueue_MSHRs);

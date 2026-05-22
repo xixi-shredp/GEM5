@@ -130,6 +130,57 @@ class MultiPrefetcher(BasePrefetcher):
     prefetchers = VectorParam.BasePrefetcher([], "Array of prefetchers")
 
 
+class AlectoMultiPrefetchers(BasePrefetcher):
+    type = "AlectoMultiPrefetchers"
+    cxx_class = "gem5::prefetch::AlectoMulti"
+    cxx_header = "mem/cache/prefetch/alecto_multi.hh"
+
+    prefetch_on_access = True
+    prefetch_on_pf_hit = False
+    prefetchers = VectorParam.BasePrefetcher([], "Array of queued prefetchers")
+    allocation_entries = Param.Unsigned(
+        64, "PC-indexed allocation table entries"
+    )
+    sample_entries = Param.Unsigned(64, "PC-indexed sample table entries")
+    sandbox_entries = Param.Unsigned(
+        512, "Address-indexed sandbox/filter table entries"
+    )
+    epoch_accesses = Param.Unsigned(
+        100, "Demand accesses per PC before updating allocation state"
+    )
+    conservative_degree = Param.Unsigned(
+        3, "Prefetch degree used for un-identified prefetchers"
+    )
+    max_aggressive_degree = Param.Unsigned(
+        5, "Maximum IA state level M; degree is conservative + m + 1"
+    )
+    proficiency_threshold_pct = Param.Percent(
+        75, "Accuracy percentage that promotes or increases a prefetcher"
+    )
+    deficiency_threshold_pct = Param.Percent(
+        5, "Accuracy percentage below which a prefetcher is blocked"
+    )
+    blocked_epochs = Param.Unsigned(
+        8, "Epochs an inefficient prefetcher remains blocked"
+    )
+    dead_counter_threshold = Param.Unsigned(
+        150, "Demand accesses with no generated prefetches before reset"
+    )
+    temporal_prefetcher_indices = VectorParam.Unsigned(
+        [], "Child indices treated as temporal prefetchers"
+    )
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        for child in self.prefetchers:
+            child.use_virtual_addresses = self.use_virtual_addresses
+
+    def registerMMU(self, simObj):
+        super().registerMMU(simObj)
+        for child in self.prefetchers:
+            child.registerMMU(simObj)
+
+
 class QueuedPrefetcher(BasePrefetcher):
     type = "QueuedPrefetcher"
     abstract = True
