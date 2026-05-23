@@ -176,6 +176,11 @@ class Queued : public Base
     /** Percentage of requests that can be throttled */
     const unsigned int throttleControlPct;
 
+    virtual void
+    notifyPacketAccepted(const PrefetchInfo &pfi, int32_t priority,
+                         const PacketPtr &pkt)
+    {}
+
     struct QueuedStats : public statistics::Group
     {
         QueuedStats(statistics::Group *parent);
@@ -204,6 +209,8 @@ class Queued : public Base
                                    std::vector<AddrPriority> &addresses,
                                    const CacheAccessor &cache) = 0;
     PacketPtr getPacket() override;
+    static void notifyPacketAccepted(const PacketPtr &pkt);
+    static void notifyPacketDropped(const PacketPtr &pkt);
 
     Tick nextPrefetchReadyTime() const override
     {
@@ -229,6 +236,9 @@ class Queued : public Base
      * @param max maximum number of translations to perform
      */
     void processMissingTranslations(unsigned max);
+
+    void registerIssuedPrefetch(const PacketPtr &pkt, const PrefetchInfo &pfi,
+                                int32_t priority);
 
     /**
      * Indicates that the translation of the address of the provided  deferred

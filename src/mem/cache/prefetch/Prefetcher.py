@@ -601,6 +601,50 @@ class BOPPrefetcher(QueuedPrefetcher):
     on_inst = False
 
 
+class MLOPrefetcher(QueuedPrefetcher):
+    type = "MLOPrefetcher"
+    cxx_class = "gem5::prefetch::MLOPrefetcher"
+    cxx_header = "mem/cache/prefetch/mlop.hh"
+
+    access_map_entries = Param.Unsigned(
+        256, "Number of access-map table zones"
+    )
+    access_map_ways = Param.Unsigned(
+        16, "Number of ways per hashed access-map table set"
+    )
+    zone_size = Param.MemorySize(
+        "4KiB", "Memory region covered by one access-map entry"
+    )
+    lookahead_levels = Param.Unsigned(
+        16, "Number of independent lookahead levels to score"
+    )
+    training_accesses = Param.Unsigned(
+        500, "Trigger accesses per offset evaluation period"
+    )
+    l1_score_threshold_pct = Param.Percent(
+        40,
+        "Minimum score, as a percentage of the evaluation period, "
+        "required to issue an offset as an L1-level MLOP candidate",
+    )
+    l2_score_threshold_pct = Param.Percent(
+        30,
+        "Minimum score, as a percentage of the evaluation period, "
+        "required to keep a lower-confidence L2-level MLOP candidate",
+    )
+    max_prefetches_per_access = Param.Unsigned(
+        16, "Maximum prefetch candidates generated for one access"
+    )
+
+    queue_squash = True
+    queue_filter = True
+    cache_snoop = True
+    prefetch_on_access = True
+    prefetch_on_pf_hit = False
+    on_miss = False
+    on_write = False
+    on_inst = False
+
+
 class SmsPrefetcher(QueuedPrefetcher):
     # Paper: https://web.eecs.umich.edu/~twenisch/papers/isca06.pdf
     type = "SmsPrefetcher"

@@ -57,6 +57,7 @@
 #include "mem/cache/mshr.hh"
 #include "mem/cache/mshr_queue.hh"
 #include "mem/cache/prefetch/base.hh"
+#include "mem/cache/prefetch/queued.hh"
 #include "mem/cache/queue_entry.hh"
 #include "mem/cache/tags/compressed_tags.hh"
 #include "mem/cache/tags/partitioning_policies/partition_manager.hh"
@@ -961,18 +962,21 @@ BaseCache::getNextQueueEntry()
                 DPRINTF(HWPrefetch, "Prefetch %#x has hit in cache, "
                         "dropped.\n", pf_addr);
                 prefetcher->pfHitInCache();
+                prefetch::Queued::notifyPacketDropped(pkt);
                 // free the request and packet
                 delete pkt;
             } else if (mshrQueue.findMatch(pf_addr, pkt->isSecure())) {
                 DPRINTF(HWPrefetch, "Prefetch %#x has hit in a MSHR, "
                         "dropped.\n", pf_addr);
                 prefetcher->pfHitInMSHR();
+                prefetch::Queued::notifyPacketDropped(pkt);
                 // free the request and packet
                 delete pkt;
             } else if (writeBuffer.findMatch(pf_addr, pkt->isSecure())) {
                 DPRINTF(HWPrefetch, "Prefetch %#x has hit in the "
                         "Write Buffer, dropped.\n", pf_addr);
                 prefetcher->pfHitInWB();
+                prefetch::Queued::notifyPacketDropped(pkt);
                 // free the request and packet
                 delete pkt;
             } else {
@@ -984,7 +988,9 @@ BaseCache::getNextQueueEntry()
                 // allocate an MSHR and return it, note
                 // that we send the packet straight away, so do not
                 // schedule the send
-                return allocateMissBuffer(pkt, curTick(), false);
+                MSHR *mshr = allocateMissBuffer(pkt, curTick(), false);
+                prefetch::Queued::notifyPacketAccepted(pkt);
+                return mshr;
             }
         }
     }

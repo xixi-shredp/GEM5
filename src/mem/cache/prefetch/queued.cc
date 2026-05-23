@@ -38,6 +38,7 @@
 #include "mem/cache/prefetch/queued.hh"
 
 #include <cassert>
+#include <unordered_map>
 
 #include "arch/generic/tlb.hh"
 #include "base/logging.hh"
@@ -53,6 +54,25 @@ namespace gem5
 
 namespace prefetch
 {
+
+namespace
+{
+
+struct IssuedPrefetchInfo
+{
+    Queued *owner;
+    Base::PrefetchInfo pfInfo;
+    int32_t priority;
+
+    IssuedPrefetchInfo(Queued *_owner, const Base::PrefetchInfo &_pf_info,
+                       int32_t _priority)
+        : owner(_owner), pfInfo(_pf_info), priority(_priority)
+    {}
+};
+
+std::unordered_map<const Packet *, IssuedPrefetchInfo> issuedPrefetchInfo;
+
+} // anonymous namespace
 
 void
 Queued::DeferredPacket::createPkt(Addr paddr, unsigned blk_size,
@@ -110,6 +130,15 @@ Queued::Queued(const QueuedPrefetcherParams &p)
 
 Queued::~Queued()
 {
+    auto it = issuedPrefetchInfo.begin();
+    while (it != issuedPrefetchInfo.end()) {
+        if (it->second.owner == this) {
+            it = issuedPrefetchInfo.erase(it);
+        } else {
+            it++;
+        }
+    }
+
     // Delete the queued prefetch packets
     for (DeferredPacket &p : pfq) {
         delete p.pkt;
@@ -251,16 +280,47 @@ Queued::getPacket()
         return nullptr;
     }
 
-    PacketPtr pkt = pfq.front().pkt;
+    const DeferredPacket &dp = pfq.front();
+    PacketPtr pkt = dp.pkt;
+    assert(pkt != nullptr);
+    registerIssuedPrefetch(pkt, dp.pfInfo, dp.priority);
     pfq.pop_front();
 
     prefetchStats.pfIssued++;
     issuedPrefetches += 1;
-    assert(pkt != nullptr);
     DPRINTF(HWPrefetch, "Generating prefetch for %#x.\n", pkt->getAddr());
 
     processMissingTranslations(queueSize - pfq.size());
     return pkt;
+}
+
+void
+Queued::registerIssuedPrefetch(const PacketPtr &pkt, const PrefetchInfo &pfi,
+                               int32_t priority)
+{
+    auto it = issuedPrefetchInfo.find(pkt);
+    panic_if(it != issuedPrefetchInfo.end(),
+             "Queued prefetch packet already has pending issue metadata.");
+    issuedPrefetchInfo.emplace(pkt, IssuedPrefetchInfo(this, pfi, priority));
+}
+
+void
+Queued::notifyPacketAccepted(const PacketPtr &pkt)
+{
+    auto it = issuedPrefetchInfo.find(pkt);
+    if (it == issuedPrefetchInfo.end()) {
+        return;
+    }
+
+    Queued *owner = it->second.owner;
+    owner->notifyPacketAccepted(it->second.pfInfo, it->second.priority, pkt);
+    issuedPrefetchInfo.erase(it);
+}
+
+void
+Queued::notifyPacketDropped(const PacketPtr &pkt)
+{
+    issuedPrefetchInfo.erase(pkt);
 }
 
 Queued::QueuedStats::QueuedStats(statistics::Group *parent)

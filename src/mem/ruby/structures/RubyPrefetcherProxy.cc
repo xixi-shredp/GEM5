@@ -38,6 +38,7 @@
 #include "mem/ruby/structures/RubyPrefetcherProxy.hh"
 
 #include "debug/HWPrefetch.hh"
+#include "mem/cache/prefetch/queued.hh"
 #include "mem/ruby/system/RubySystem.hh"
 #include "params/RubyController.hh"
 
@@ -146,9 +147,11 @@ RubyPrefetcherProxy::issuePrefetch()
 
                 // track all pending PF requests
                 issuedPfPkts[line_addr] = pkt;
+                prefetch::Queued::notifyPacketAccepted(pkt);
             } else {
                 DPRINTF(HWPrefetch, "Aborted PF request for address being "
                                     "prefetched\n");
+                prefetch::Queued::notifyPacketDropped(pkt);
                 delete pkt;
             }
         }
