@@ -371,6 +371,95 @@ class SignaturePathPrefetcherV2(SignaturePathPrefetcher):
     )
 
 
+class SPP_PPFPrefetcher(QueuedPrefetcher):
+    type = "SPP_PPFPrefetcher"
+    cxx_class = "gem5::prefetch::SPP_PPF"
+    cxx_header = "mem/cache/prefetch/spp_ppf.hh"
+
+    on_inst = False
+    prefetch_on_access = True
+    prefetch_on_pf_hit = False
+    queue_size = 64
+
+    signature_shift = Param.Unsigned(
+        3, "Number of bits to shift when calculating a new signature"
+    )
+    signature_bits = Param.Unsigned(12, "Size of the signature, in bits")
+    signature_delta_bits = Param.Unsigned(
+        7, "Sign-magnitude delta width used in signature updates"
+    )
+    signature_tag_bits = Param.Unsigned(
+        16, "Number of page tag bits stored in the signature table"
+    )
+    signature_table_entries = Param.MemorySize(
+        "256", "Number of entries in the signature table"
+    )
+
+    pattern_table_entries = Param.MemorySize(
+        "2048", "Number of entries in the pattern table"
+    )
+    strides_per_pattern_entry = Param.Unsigned(
+        4, "Number of delta slots stored per pattern entry"
+    )
+    pattern_counter_bits = Param.Unsigned(
+        4, "Number of bits for pattern-table counters"
+    )
+
+    global_history_register_entries = Param.MemorySize(
+        "8", "Number of entries in the page-crossing global history register"
+    )
+    recent_page_entries = Param.Unsigned(
+        6, "Recent demand pages tracked for per-page queue division"
+    )
+    global_counter_bits = Param.Unsigned(
+        10, "Number of bits for global useful/issued counters"
+    )
+
+    prefetch_filter_entries = Param.MemorySize(
+        "1024", "Number of accepted-prefetch filter entries"
+    )
+    reject_filter_entries = Param.MemorySize(
+        "1024", "Number of rejected-prefetch filter entries"
+    )
+
+    perceptron_entries = Param.MemorySize(
+        "4096", "Number of rows in the perceptron weight table"
+    )
+    perceptron_feature_depths = VectorParam.Unsigned(
+        [2048, 4096, 4096, 4096, 1024, 4096, 1024, 2048, 128],
+        "Per-feature perceptron table depths",
+    )
+    perceptron_counter_bits = Param.Unsigned(
+        5, "Signed perceptron counter width"
+    )
+    perceptron_threshold_hi = Param.Int(
+        -5, "High perceptron threshold for high-priority prefetches"
+    )
+    perceptron_threshold_lo = Param.Int(
+        -15, "Low perceptron threshold for accepting prefetches"
+    )
+    positive_update_threshold = Param.Int(
+        90, "Do not reinforce useful predictions at or above this sum"
+    )
+    negative_update_threshold = Param.Int(
+        -80, "Do not reinforce useless predictions at or below this sum"
+    )
+    max_lookahead_depth = Param.Unsigned(
+        100, "Maximum speculative SPP lookahead depth per access"
+    )
+    max_prefetches_per_access = Param.Unsigned(
+        100, "Maximum candidates generated per access before queue filtering"
+    )
+    reject_filter_candidate_window = Param.Unsigned(
+        16,
+        "Maximum generated-candidate window eligible for reject-filter records",
+    )
+    issue_low_confidence = Param.Bool(
+        False,
+        "Fill lo-to-hi LLC candidates into this cache instead of LLC-only",
+    )
+
+
 class AccessMapPatternMatching(ClockedObject):
     type = "AccessMapPatternMatching"
     cxx_class = "gem5::prefetch::AccessMapPatternMatching"

@@ -75,6 +75,7 @@ class Queued : public Base
         RequestPtr translationRequest;
         ThreadContext *tc;
         bool ongoingTranslation;
+        bool skipCacheFill;
         const CacheAccessor *cache;
 
         /**
@@ -86,11 +87,19 @@ class Queued : public Base
          * @param prio This prefetch priority
          */
         DeferredPacket(Queued *o, PrefetchInfo const &pfi, Tick t,
-            int32_t prio, const CacheAccessor &_cache)
-            : owner(o), pfInfo(pfi), tick(t), pkt(nullptr),
-            priority(prio), translationRequest(), tc(nullptr),
-            ongoingTranslation(false), cache(&_cache) {
-        }
+                       int32_t prio, bool skip_cache_fill,
+                       const CacheAccessor &_cache)
+            : owner(o),
+              pfInfo(pfi),
+              tick(t),
+              pkt(nullptr),
+              priority(prio),
+              translationRequest(),
+              tc(nullptr),
+              ongoingTranslation(false),
+              skipCacheFill(skip_cache_fill),
+              cache(&_cache)
+        {}
 
         bool operator>(const DeferredPacket& that) const
         {
@@ -117,6 +126,8 @@ class Queued : public Base
          */
         void createPkt(Addr paddr, unsigned blk_size, RequestorID requestor_id,
                        bool tag_prefetch, Tick t);
+
+        void setSkipCacheFill(bool skip_cache_fill);
 
         /**
          * Sets the translation request needed to obtain the physical address
@@ -189,8 +200,35 @@ class Queued : public Base
         statistics::Scalar pfUsefulSpanPage;
     } statsQueued;
   public:
-    using AddrPriority = std::pair<Addr, int32_t>;
+    struct AddrPriority
+    {
+        Addr first;
+        int32_t second;
+        bool skipCacheFill;
 
+        AddrPriority(Addr addr, int32_t priority, bool skip_cache_fill = false)
+            : first(addr), second(priority), skipCacheFill(skip_cache_fill)
+        {}
+    };
+
+  protected:
+    virtual bool
+    supportsFillLevelHints() const
+    {
+        return false;
+    }
+
+    virtual void
+    prefetchQueued(const PrefetchInfo &pfi, const AddrPriority &addr_prio)
+    {}
+
+    virtual void
+    prefetchSquashed(const PrefetchInfo &pfi, const AddrPriority &addr_prio)
+    {}
+
+    void squashQueuedPrefetches(Addr blk_addr, bool is_secure);
+
+  public:
     Queued(const QueuedPrefetcherParams &p);
     virtual ~Queued();
 
@@ -198,7 +236,7 @@ class Queued : public Base
     notify(const CacheAccessProbeArg &acc, const PrefetchInfo &pfi) override;
 
     void insert(const PacketPtr &pkt, PrefetchInfo &new_pfi, int32_t priority,
-                const CacheAccessor &cache);
+                const CacheAccessor &cache, bool skip_cache_fill = false);
 
     virtual void calculatePrefetch(const PrefetchInfo &pfi,
                                    std::vector<AddrPriority> &addresses,
@@ -250,7 +288,8 @@ class Queued : public Base
      * @return True if the prefetch request was found in the queue
      */
     bool alreadyInQueue(std::list<DeferredPacket> &queue,
-                        const PrefetchInfo &pfi, int32_t priority);
+                        const PrefetchInfo &pfi, int32_t priority,
+                        bool skip_cache_fill);
 
     /**
      * Returns the maxmimum number of prefetch requests that are allowed

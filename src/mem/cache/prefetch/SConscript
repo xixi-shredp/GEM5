@@ -33,6 +33,7 @@ SimObject('Prefetcher.py', sim_objects=[
     'StridePrefetcherHashedSetAssociative', 'StridePrefetcher',
     'SmsPrefetcher', 'TaggedPrefetcher', 'IndirectMemoryPrefetcher',
     'SignaturePathPrefetcher', 'SignaturePathPrefetcherV2',
+    'SPP_PPFPrefetcher',
     'AccessMapPatternMatching', 'AMPMPrefetcher',
     'DeltaCorrelatingPredictionTables', 'DCPTPrefetcher',
     'IrregularStreamBufferPrefetcher', 'SlimAMPMPrefetcher',
@@ -53,6 +54,7 @@ Source('sbooe.cc')
 Source('sms.cc')
 Source('signature_path.cc')
 Source('signature_path_v2.cc')
+Source('spp_ppf.cc')
 Source('slim_ampm.cc')
 Source('spatio_temporal_memory_streaming.cc')
 Source('stride.cc')

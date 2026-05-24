@@ -60,10 +60,20 @@ namespace gem5
 {
 
 MSHR::MSHR(const std::string &name)
-    : QueueEntry(name), Printable(), downstreamPending(false),
-      pendingModified(false), postInvalidate(false), postDowngrade(false),
-      wasWholeLineWrite(false), isForward(false), readyIter(), allocIter(),
-      targets(name + ".targets"), deferredTargets(name + ".deferredTargets")
+    : QueueEntry(name),
+      Printable(),
+      downstreamPending(false),
+      pendingModified(false),
+      postInvalidate(false),
+      postDowngrade(false),
+      prefetchedOnFillFlag(false),
+      skipFillPrefetchFlag(false),
+      wasWholeLineWrite(false),
+      isForward(false),
+      readyIter(),
+      allocIter(),
+      targets(name + ".targets"),
+      deferredTargets(name + ".deferredTargets")
 {
 }
 
@@ -94,7 +104,8 @@ MSHR::TargetList::updateFlags(PacketPtr pkt, Target::Source source,
         allocOnFill = allocOnFill || alloc_on_fill;
 
         if (source != Target::FromPrefetcher) {
-            hasFromCache = hasFromCache || pkt->fromCache();
+            hasFromCache =
+                hasFromCache || (pkt->fromCache() && !pkt->forceCacheFill());
 
             updateWriteFlags(pkt);
         }
@@ -311,6 +322,8 @@ MSHR::allocate(Addr blk_addr, unsigned blk_size, PacketPtr target,
     _isUncacheable = target->req->isUncacheable();
     inService = false;
     downstreamPending = false;
+    skipFillPrefetchFlag =
+        target->cmd == MemCmd::HardPFReq && target->skipCacheFill();
 
     targets.init(blkAddr, blkSize);
     deferredTargets.init(blkAddr, blkSize);
@@ -363,6 +376,8 @@ MSHR::deallocate()
     assert(targets.empty());
     targets.resetFlags();
     assert(deferredTargets.isReset());
+    prefetchedOnFillFlag = false;
+    skipFillPrefetchFlag = false;
     inService = false;
 }
 
@@ -726,15 +741,15 @@ MSHR::sendPacket(BaseCache &cache)
 void
 MSHR::print(std::ostream &os, int verbosity, const std::string &prefix) const
 {
-    ccprintf(os, "%s[%#llx:%#llx](%s) %s %s %s state: %s %s %s %s %s %s\n",
-             prefix, blkAddr, blkAddr + blkSize - 1,
-             isSecure ? "s" : "ns",
-             isForward ? "Forward" : "",
-             allocOnFill() ? "AllocOnFill" : "",
-             needsWritable() ? "Wrtbl" : "",
-             _isUncacheable ? "Unc" : "",
-             inService ? "InSvc" : "",
-             downstreamPending ? "DwnPend" : "",
+    ccprintf(os,
+             "%s[%#llx:%#llx](%s) %s %s %s %s %s state: "
+             "%s %s %s %s %s %s\n",
+             prefix, blkAddr, blkAddr + blkSize - 1, isSecure ? "s" : "ns",
+             isForward ? "Forward" : "", allocOnFill() ? "AllocOnFill" : "",
+             prefetchedOnFill() ? "PrefetchedOnFill" : "",
+             isSkipFillPrefetch() ? "SkipFillPrefetch" : "",
+             needsWritable() ? "Wrtbl" : "", _isUncacheable ? "Unc" : "",
+             inService ? "InSvc" : "", downstreamPending ? "DwnPend" : "",
              postInvalidate ? "PostInv" : "",
              postDowngrade ? "PostDowngr" : "",
              hasFromCache() ? "HasFromCache" : "");

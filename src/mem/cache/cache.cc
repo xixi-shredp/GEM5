@@ -565,6 +565,12 @@ Cache::createMissPacket(PacketPtr cpu_pkt, CacheBlk *blk,
                 __func__, cpu_pkt->print(), pkt->print());
     }
 
+    if (cpu_pkt->skipCacheFill() || cpu_pkt->forceCacheFill()) {
+        pkt->setForceCacheFill();
+        DPRINTF(Cache, "%s: forcing lower-level fill for %s from %s\n",
+                __func__, pkt->print(), cpu_pkt->print());
+    }
+
     // the packet should be block aligned
     assert(pkt->getAddr() == pkt->getBlockAddr(blkSize));
 
@@ -635,7 +641,8 @@ Cache::handleAtomicReqMiss(PacketPtr pkt, CacheBlk *&blk,
 
                 // write-line request to the cache that promoted
                 // the write to a whole line
-                const bool allocate = allocOnFill(pkt->cmd) &&
+                const bool allocate =
+                    allocOnFill(pkt) &&
                     (!writeAllocator || writeAllocator->allocate());
                 blk = handleFill(bus_pkt, blk, writebacks, allocate);
                 assert(blk != NULL);
@@ -645,10 +652,10 @@ Cache::handleAtomicReqMiss(PacketPtr pkt, CacheBlk *&blk,
                        bus_pkt->cmd == MemCmd::UpgradeResp) {
                 // we're updating cache state to allow us to
                 // satisfy the upstream request from the cache
-                blk = handleFill(bus_pkt, blk, writebacks,
-                                 allocOnFill(pkt->cmd));
+                blk = handleFill(bus_pkt, blk, writebacks, allocOnFill(pkt));
                 satisfyRequest(pkt, blk);
-                maintainClusivity(pkt->fromCache(), blk);
+                maintainClusivity(pkt->fromCache() && !pkt->forceCacheFill(),
+                                  blk);
             } else {
                 // we're satisfying the upstream request without
                 // modifying cache state, e.g., a write-through
@@ -909,7 +916,9 @@ Cache::serviceMSHRTargets(MSHR *mshr, const PacketPtr pkt, CacheBlk *blk)
 
           case MSHR::Target::FromPrefetcher:
             assert(tgt_pkt->cmd == MemCmd::HardPFReq);
-            from_pref = true;
+            if (!tgt_pkt->skipCacheFill()) {
+                from_pref = true;
+            }
 
             delete tgt_pkt;
             break;
@@ -938,6 +947,8 @@ Cache::serviceMSHRTargets(MSHR *mshr, const PacketPtr pkt, CacheBlk *blk)
             panic("Illegal target->source enum %d\n", target.source);
         }
     }
+
+    from_pref = from_pref || mshr->prefetchedOnFill();
 
     if (blk && !from_core && from_pref) {
         blk->setPrefetched();

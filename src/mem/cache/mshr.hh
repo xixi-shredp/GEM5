@@ -118,6 +118,12 @@ class MSHR : public QueueEntry, public Printable
     /** Did we snoop a read while waiting for data? */
     bool postDowngrade;
 
+    /** Mark the filled block as prefetched after a prefetch MSHR upgrade. */
+    bool prefetchedOnFillFlag;
+
+    /** True if this MSHR was created by an LLC-fill skip-cache prefetch. */
+    bool skipFillPrefetchFlag;
+
   public:
 
     /** Track if we sent this as a whole line write or not */
@@ -339,6 +345,31 @@ class MSHR : public QueueEntry, public Printable
 
     bool allocOnFill() const {
         return targets.allocOnFill;
+    }
+
+    void
+    promoteAllocOnFill()
+    {
+        targets.allocOnFill = true;
+    }
+
+    void
+    promotePrefetchAllocOnFill()
+    {
+        targets.allocOnFill = true;
+        prefetchedOnFillFlag = true;
+    }
+
+    bool
+    prefetchedOnFill() const
+    {
+        return prefetchedOnFillFlag;
+    }
+
+    bool
+    isSkipFillPrefetch() const
+    {
+        return skipFillPrefetchFlag;
     }
 
     /**

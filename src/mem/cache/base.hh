@@ -342,6 +342,18 @@ class BaseCache : public ClockedObject
         bool inMissQueue(Addr addr, bool is_secure) const override
         { return cache.inMissQueue(addr, is_secure); }
 
+        bool
+        missQueueAllocatesOnFill(Addr addr, bool is_secure) const override
+        {
+            return cache.missQueueAllocatesOnFill(addr, is_secure);
+        }
+
+        bool
+        missQueueIsSkipFillPrefetch(Addr addr, bool is_secure) const override
+        {
+            return cache.missQueueIsSkipFillPrefetch(addr, is_secure);
+        }
+
         bool coalesce() const override
         { return cache.coalesce(); }
 
@@ -448,6 +460,13 @@ class BaseCache : public ClockedObject
             cmd == MemCmd::WriteReq ||
             cmd.isPrefetch() ||
             cmd.isLLSC();
+    }
+
+    inline bool
+    allocOnFill(PacketPtr pkt) const
+    {
+        return !pkt->skipCacheFill() &&
+               (pkt->forceCacheFill() || allocOnFill(pkt->cmd));
     }
 
     /**
@@ -1175,8 +1194,7 @@ class BaseCache : public ClockedObject
     MSHR *allocateMissBuffer(PacketPtr pkt, Tick time, bool sched_send = true)
     {
         MSHR *mshr = mshrQueue.allocate(pkt->getBlockAddr(blkSize), blkSize,
-                                        pkt, time, order++,
-                                        allocOnFill(pkt->cmd));
+                                        pkt, time, order++, allocOnFill(pkt));
 
         if (mshrQueue.isFull()) {
             setBlocked((BlockedCause)MSHRQueue_MSHRs);
@@ -1266,6 +1284,20 @@ class BaseCache : public ClockedObject
 
     bool inMissQueue(Addr addr, bool is_secure) const {
         return mshrQueue.findMatch(addr, is_secure);
+    }
+
+    bool
+    missQueueAllocatesOnFill(Addr addr, bool is_secure) const
+    {
+        const MSHR *mshr = mshrQueue.findMatch(addr, is_secure);
+        return mshr && mshr->allocOnFill();
+    }
+
+    bool
+    missQueueIsSkipFillPrefetch(Addr addr, bool is_secure) const
+    {
+        const MSHR *mshr = mshrQueue.findMatch(addr, is_secure);
+        return mshr && mshr->isSkipFillPrefetch();
     }
 
     void incMissCount(PacketPtr pkt)

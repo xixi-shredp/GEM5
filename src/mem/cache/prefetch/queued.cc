@@ -68,12 +68,28 @@ Queued::DeferredPacket::createPkt(Addr paddr, unsigned blk_size,
     }
     req->taskId(context_switch_task_id::Prefetcher);
     pkt = new Packet(req, MemCmd::HardPFReq);
+    if (skipCacheFill) {
+        pkt->setSkipCacheFill();
+    }
     pkt->allocate();
     if (tag_prefetch && pfInfo.hasPC()) {
         // Tag prefetch packet with  accessing pc
         pkt->req->setPC(pfInfo.getPC());
     }
     tick = t;
+}
+
+void
+Queued::DeferredPacket::setSkipCacheFill(bool skip_cache_fill)
+{
+    skipCacheFill = skip_cache_fill;
+    if (pkt) {
+        if (skip_cache_fill) {
+            pkt->setSkipCacheFill();
+        } else {
+            pkt->clearSkipCacheFill();
+        }
+    }
 }
 
 void
@@ -169,6 +185,36 @@ Queued::getMaxPermittedPrefetches(size_t total) const
 }
 
 void
+Queued::squashQueuedPrefetches(Addr blk_addr, bool is_secure)
+{
+    if (!queueSquash) {
+        return;
+    }
+
+    auto itr = pfq.begin();
+    while (itr != pfq.end()) {
+        if (blockAddress(itr->pfInfo.getAddr()) == blk_addr &&
+            itr->pfInfo.isSecure() == is_secure) {
+            DPRINTF(HWPrefetch,
+                    "Removing pf candidate addr: %#x "
+                    "(cl: %#x), demand request going to the same addr\n",
+                    itr->pfInfo.getAddr(),
+                    blockAddress(itr->pfInfo.getAddr()));
+            if (supportsFillLevelHints()) {
+                const AddrPriority squashed_addr(
+                    itr->pfInfo.getAddr(), itr->priority, itr->skipCacheFill);
+                prefetchSquashed(itr->pfInfo, squashed_addr);
+            }
+            delete itr->pkt;
+            itr = pfq.erase(itr);
+            statsQueued.pfRemovedDemand++;
+        } else {
+            ++itr;
+        }
+    }
+}
+
+void
 Queued::notify(const CacheAccessProbeArg &acc, const PrefetchInfo &pfi)
 {
     Addr blk_addr = blockAddress(pfi.getAddr());
@@ -177,23 +223,7 @@ Queued::notify(const CacheAccessProbeArg &acc, const PrefetchInfo &pfi)
     const CacheAccessor &cache = acc.cache;
 
     // Squash queued prefetches if demand miss to same line
-    if (queueSquash) {
-        auto itr = pfq.begin();
-        while (itr != pfq.end()) {
-            if (blockAddress(itr->pfInfo.getAddr()) == blk_addr &&
-                itr->pfInfo.isSecure() == is_secure) {
-                DPRINTF(HWPrefetch, "Removing pf candidate addr: %#x "
-                        "(cl: %#x), demand request going to the same addr\n",
-                        itr->pfInfo.getAddr(),
-                        blockAddress(itr->pfInfo.getAddr()));
-                delete itr->pkt;
-                itr = pfq.erase(itr);
-                statsQueued.pfRemovedDemand++;
-            } else {
-                ++itr;
-            }
-        }
-    }
+    squashQueuedPrefetches(blk_addr, is_secure);
 
     // Calculate prefetches given this access
     std::vector<AddrPriority> addresses;
@@ -223,8 +253,10 @@ Queued::notify(const CacheAccessProbeArg &acc, const PrefetchInfo &pfi)
             statsQueued.pfIdentified++;
             DPRINTF(HWPrefetch, "Found a pf candidate addr: %#x, "
                     "inserting into prefetch queue.\n", new_pfi.getAddr());
+            const bool skip_cache_fill =
+                supportsFillLevelHints() && addr_prio.skipCacheFill;
             // Create and insert the request
-            insert(pkt, new_pfi, addr_prio.second, cache);
+            insert(pkt, new_pfi, addr_prio.second, cache, skip_cache_fill);
             num_pfs += 1;
             if (num_pfs == max_pfs) {
                 break;
@@ -340,7 +372,8 @@ Queued::translationComplete(DeferredPacket *dp, bool failed,
 
 bool
 Queued::alreadyInQueue(std::list<DeferredPacket> &queue,
-                                 const PrefetchInfo &pfi, int32_t priority)
+                       const PrefetchInfo &pfi, int32_t priority,
+                       bool skip_cache_fill)
 {
     bool found = false;
     iterator it;
@@ -351,9 +384,11 @@ Queued::alreadyInQueue(std::list<DeferredPacket> &queue,
     /* If the address is already in the queue, update priority and leave */
     if (it != queue.end()) {
         statsQueued.pfBufferHit++;
+        const bool was_skip_cache_fill = it->skipCacheFill;
         if (it->priority < priority) {
             /* Update priority value and position in the queue */
             it->priority = priority;
+            it->setSkipCacheFill(skip_cache_fill);
             iterator prev = it;
             while (prev != queue.begin()) {
                 prev--;
@@ -366,8 +401,19 @@ Queued::alreadyInQueue(std::list<DeferredPacket> &queue,
             DPRINTF(HWPrefetch, "Prefetch addr already in "
                 "prefetch queue, priority updated\n");
         } else {
+            if (!skip_cache_fill && it->priority == priority) {
+                it->setSkipCacheFill(false);
+            }
             DPRINTF(HWPrefetch, "Prefetch addr already in "
                 "prefetch queue\n");
+        }
+        const bool promoted_to_fill = supportsFillLevelHints() &&
+                                      was_skip_cache_fill &&
+                                      !it->skipCacheFill;
+        if (promoted_to_fill) {
+            const AddrPriority queued_addr(pfi.getAddr(), it->priority,
+                                           it->skipCacheFill);
+            prefetchQueued(pfi, queued_addr);
         }
     }
     return found;
@@ -385,14 +431,15 @@ Queued::createPrefetchRequest(Addr addr, PrefetchInfo const &pfi,
 }
 
 void
-Queued::insert(const PacketPtr &pkt, PrefetchInfo &new_pfi,
-               int32_t priority, const CacheAccessor &cache)
+Queued::insert(const PacketPtr &pkt, PrefetchInfo &new_pfi, int32_t priority,
+               const CacheAccessor &cache, bool skip_cache_fill)
 {
     if (queueFilter) {
-        if (alreadyInQueue(pfq, new_pfi, priority)) {
+        if (alreadyInQueue(pfq, new_pfi, priority, skip_cache_fill)) {
             return;
         }
-        if (alreadyInQueue(pfqMissingTranslation, new_pfi, priority)) {
+        if (alreadyInQueue(pfqMissingTranslation, new_pfi, priority,
+                           skip_cache_fill)) {
             return;
         }
     }
@@ -455,8 +502,13 @@ Queued::insert(const PacketPtr &pkt, PrefetchInfo &new_pfi,
         }
     }
     if (has_target_pa && cacheSnoop &&
-            (cache.inCache(target_paddr, new_pfi.isSecure()) ||
-             cache.inMissQueue(target_paddr, new_pfi.isSecure()))) {
+        (cache.inCache(target_paddr, new_pfi.isSecure()) ||
+         (cache.inMissQueue(target_paddr, new_pfi.isSecure()) &&
+          (skip_cache_fill || !supportsFillLevelHints() ||
+           !cache.missQueueIsSkipFillPrefetch(target_paddr,
+                                              new_pfi.isSecure()) ||
+           cache.missQueueAllocatesOnFill(target_paddr,
+                                          new_pfi.isSecure()))))) {
         statsQueued.pfInCache++;
         DPRINTF(HWPrefetch, "Dropping redundant in "
                 "cache/MSHR prefetch addr:%#x\n", target_paddr);
@@ -464,7 +516,9 @@ Queued::insert(const PacketPtr &pkt, PrefetchInfo &new_pfi,
     }
 
     /* Create the packet and find the spot to insert it */
-    DeferredPacket dpp(this, new_pfi, 0, priority, cache);
+    DeferredPacket dpp(this, new_pfi, 0, priority, skip_cache_fill, cache);
+    const AddrPriority queued_addr(new_pfi.getAddr(), priority,
+                                   skip_cache_fill);
     if (has_target_pa) {
         Tick pf_time = curTick() + clockPeriod() * latency;
         dpp.createPkt(target_paddr, blkSize, requestorId, tagPrefetch,
@@ -473,6 +527,9 @@ Queued::insert(const PacketPtr &pkt, PrefetchInfo &new_pfi,
                 "addr:%#x priority: %3d tick:%lld.\n",
                 new_pfi.getAddr(), priority, pf_time);
         addToQueue(pfq, dpp);
+        if (supportsFillLevelHints()) {
+            prefetchQueued(new_pfi, queued_addr);
+        }
     } else {
         // Add the translation request and try to resolve it later
         dpp.setTranslationRequest(translation_req);
@@ -480,6 +537,9 @@ Queued::insert(const PacketPtr &pkt, PrefetchInfo &new_pfi,
         DPRINTF(HWPrefetch, "Prefetch queued with no translation. "
                 "addr:%#x priority: %3d\n", new_pfi.getAddr(), priority);
         addToQueue(pfqMissingTranslation, dpp);
+        if (supportsFillLevelHints()) {
+            prefetchQueued(new_pfi, queued_addr);
+        }
     }
 }
 

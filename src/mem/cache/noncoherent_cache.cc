@@ -156,6 +156,11 @@ NoncoherentCache::createMissPacket(PacketPtr cpu_pkt, CacheBlk *blk,
     assert(!blk || !blk->isValid());
 
     PacketPtr pkt = new Packet(cpu_pkt->req, MemCmd::ReadReq, blkSize);
+    if (cpu_pkt->skipCacheFill() || cpu_pkt->forceCacheFill()) {
+        pkt->setForceCacheFill();
+        DPRINTF(Cache, "%s: forcing lower-level fill for %s from %s\n",
+                __func__, pkt->print(), cpu_pkt->print());
+    }
 
     // the packet should be block aligned
     assert(pkt->getAddr() == pkt->getBlockAddr(blkSize));
@@ -194,12 +199,12 @@ NoncoherentCache::handleAtomicReqMiss(PacketPtr pkt, CacheBlk *&blk,
         // afterall it is a read response
         DPRINTF(Cache, "Block for addr %#llx being updated in Cache\n",
                 bus_pkt->getAddr());
-        blk = handleFill(bus_pkt, blk, writebacks, allocOnFill(bus_pkt->cmd));
+        blk = handleFill(bus_pkt, blk, writebacks, allocOnFill(pkt));
         assert(blk);
     }
     satisfyRequest(pkt, blk);
 
-    maintainClusivity(true, blk);
+    maintainClusivity(!pkt->forceCacheFill(), blk);
 
     // Use the separate bus_pkt to generate response to pkt and
     // then delete it.
@@ -297,7 +302,9 @@ NoncoherentCache::serviceMSHRTargets(MSHR *mshr, const PacketPtr pkt,
             // attached to this cache
             assert(tgt_pkt->cmd == MemCmd::HardPFReq);
 
-            from_pref = true;
+            if (!tgt_pkt->skipCacheFill()) {
+                from_pref = true;
+            }
 
             // We have filled the block and the prefetcher does not
             // require responses.
@@ -310,6 +317,8 @@ NoncoherentCache::serviceMSHRTargets(MSHR *mshr, const PacketPtr pkt,
             panic("Illegal target->source enum %d\n", target.source);
         }
     }
+
+    from_pref = from_pref || mshr->prefetchedOnFill();
 
     if (blk && !from_core && from_pref) {
         blk->setPrefetched();

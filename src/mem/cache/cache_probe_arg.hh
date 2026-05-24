@@ -68,6 +68,20 @@ struct CacheAccessor
     /** Determine if address is in cache miss queue */
     virtual bool inMissQueue(Addr addr, bool is_secure) const = 0;
 
+    /** Determine if an outstanding miss will allocate on fill */
+    virtual bool
+    missQueueAllocatesOnFill(Addr addr, bool is_secure) const
+    {
+        return inMissQueue(addr, is_secure);
+    }
+
+    /** Determine if an outstanding miss was created by a skip-fill prefetch */
+    virtual bool
+    missQueueIsSkipFillPrefetch(Addr addr, bool is_secure) const
+    {
+        return false;
+    }
+
     /** Determine if cache is coalescing writes */
     virtual bool coalesce() const = 0;
 };

@@ -398,7 +398,7 @@ BaseCache::handleTimingReqMiss(PacketPtr pkt, MSHR *mshr, CacheBlk *blk,
                 // port and also takes into account the additional
                 // delay of the xbar.
                 mshr->allocateTarget(pkt, forward_time, order++,
-                                     allocOnFill(pkt->cmd));
+                                     allocOnFill(pkt));
                 if (mshr->getNumTargets() >= numTarget) {
                     noTargetMSHR = mshr;
                     setBlocked(Blocked_NoTargets);
@@ -963,9 +963,18 @@ BaseCache::getNextQueueEntry()
                 prefetcher->pfHitInCache();
                 // free the request and packet
                 delete pkt;
-            } else if (mshrQueue.findMatch(pf_addr, pkt->isSecure())) {
+            } else if (MSHR *mshr =
+                           mshrQueue.findMatch(pf_addr, pkt->isSecure())) {
                 DPRINTF(HWPrefetch, "Prefetch %#x has hit in a MSHR, "
                         "dropped.\n", pf_addr);
+                if (!pkt->skipCacheFill() && mshr->isSkipFillPrefetch() &&
+                    !mshr->allocOnFill()) {
+                    mshr->promotePrefetchAllocOnFill();
+                    DPRINTF(HWPrefetch,
+                            "Prefetch %#x upgraded MSHR to "
+                            "allocate on fill.\n",
+                            pf_addr);
+                }
                 prefetcher->pfHitInMSHR();
                 // free the request and packet
                 delete pkt;
@@ -1534,7 +1543,7 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
         }
 
         satisfyRequest(pkt, blk);
-        maintainClusivity(pkt->fromCache(), blk);
+        maintainClusivity(pkt->fromCache() && !pkt->forceCacheFill(), blk);
 
         return true;
     }
